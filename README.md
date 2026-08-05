@@ -2,7 +2,7 @@
 
 A local kanban board for a job search that fixes one of the most annoying job board problems: **having to actually enter and move your jobs**. Drag a card between **Applied →
 Interviewing → Offer → Rejected** and it stamps the date it got there and how
-many days that took. Unemploymeny Stack reads your Gmail for confirmations and
+many days that took. Unemployment Stack reads your Gmail for confirmations and
 rejections, scrapes open postings off the web, and ranks them against your
 resume — all of it on your machine, with a local LLM. Nothing is sent anywhere. 
 There are also views to understand statistics around timing of interviews/ rejections, a github style activity tracker for job applications, a sankey diagram, and salary/skills research based on job title.  
@@ -31,7 +31,7 @@ installed" without breaking the app.
 | Resume PDF upload               | `poppler-utils` (for `pdftotext`) — or paste the text instead |
 
 `sentence-transformers` depends on PyTorch. It is recommended to install PyTorch with your desired GPU backend before installing
-the rest of the dependcies. This will make the embedding process much faster.   
+the rest of the dependencies. This will make the embedding process much faster.   
 
 ## Install
 
@@ -131,8 +131,8 @@ pages to check they're alive.
 
 This app was originally designed with qwen3.6:35b in mind but you can choose your own LLM to fit your system's requirements. 
 I also tested this using qwen3.5:4b and it runs much faster but makes more mistakes. 
-The intial ingest and job title enrichment can take a pretty long time (hours) when using larger local models even with heavy parallelism. 
-If you have a GPU it is recommended to increase the batch size on the ebmeddings to take advantage.     
+The initial ingest and job title enrichment can take a pretty long time (hours) when using larger local models even with heavy parallelism. 
+If you have a GPU it is recommended to increase the batch size on the embedding to take advantage.     
 
 
 [DOCS.md](DOCS.md) — HTTP API, CLI flags for every script, how postings are
