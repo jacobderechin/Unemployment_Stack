@@ -2,7 +2,7 @@
 
 Setup and install live in [README.md](README.md). This is everything else.
 
-## Board behaviour
+## Board behavior
 
 `status` is one of `applied`, `interviewing`, `offer`, `rejected`. Moving into
 `interviewing`/`offer`/`rejected` auto-stamps `interview_date`/`offer_date`/
@@ -210,7 +210,7 @@ float32 in `market_matches.embedding`.
 ### Locations
 
 The feed writes a location however the employer typed it — `Hybrid (NYC Metro)`, `Strava SF`,
-`Bay Area`, `San Francisco, CA, US; Remote, US`. `locations.py` canonicalises each **distinct**
+`Bay Area`, `San Francisco, CA, US; Remote, US`. `locations.py` canonicalizes each **distinct**
 string with the local model into a comma-joined city list in `location_map`, and
 `list_matches()` joins it in as `cities`. 
 
@@ -237,7 +237,7 @@ python3 test_app.py       # prints "ok" — database logic + validation rules
 python3 test_ingest.py    # prints "ok" — email reconcile logic (no network)
 python3 test_resume.py    # prints "ok" — resume scoring, extraction guards, blob round-trip
 pytest test_research.py   # profile-filter predicate
-pytest test_locations.py  # location canonicalisation, no Ollama needed
+pytest test_locations.py  # location canonicalization, no Ollama needed
 pytest test_enrich.py     # liveness rule, against captured pages from each board
 ```
 
