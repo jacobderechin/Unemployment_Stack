@@ -1,0 +1,12 @@
+# Gmail OAuth — these read your mail. Never commit them.
+credentials.json
+token.json
+
+# Your data
+*.db
+*.db-wal        # WAL mode's sidecar files; *.db does not cover them
+*.db-shm
+*.bak
+
+__pycache__/
+.pytest_cache/
