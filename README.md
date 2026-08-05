@@ -4,7 +4,7 @@ A local kanban board for a job search that fixes one of the most annoying job bo
 Interviewing → Offer → Rejected** and it stamps the date it got there and how
 many days that took. Unemployment Stack reads your Gmail for confirmations and
 rejections, scrapes open postings off the web, and ranks them against your
-resume — all of it on your machine, with a local LLM. Nothing is sent anywhere. 
+resume — all of it on your machine, with a local LLM. 
 There are also views to understand statistics around timing of interviews/ rejections, a github style activity tracker for job applications, a sankey diagram, and salary/skills research based on job title.  
 
 ## Features
