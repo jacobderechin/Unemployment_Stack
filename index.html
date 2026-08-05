@@ -1,0 +1,3350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unemployment Stack</title>
+<style>
+  /* ===========================================================================
+     Ledger — design tokens.
+     Two orthogonal channels: HUE carries stage meaning, INK carries hierarchy.
+     Chrome is achromatic on purpose, so the only color on screen means something.
+     Every value here was checked with the dataviz skill's validate_palette.js —
+     read the comment above the dark block before changing any of them.
+     =========================================================================== */
+  :root {
+    color-scheme: light;
+
+    --ground:  #e8ebe5;                 /* app background */
+    --sunk:    #dfe3db;                 /* kanban column, table head, chips */
+    --surface: #ffffff;                 /* cards, panels, tables */
+
+    --ink:   #16191c;                   /* primary text, and primary buttons */
+    --ink-2: #5c6560;                   /* secondary text */
+    --ink-3: #6e766d;                   /* tertiary text */
+
+    --rule:        #ccd2c8;             /* dividers, card borders */
+    --rule-strong: #929c8e;             /* input and control borders */
+
+    /* Stage hues — meaning only, never chrome. The light four are unchanged from
+       the original palette: they were already CVD-validated and this direction
+       has no reason to spend that work. */
+    --stage-applied:   #0052cc;
+    --stage-interview: #ff8b00;
+    --stage-offer:     #36b37e;
+    --stage-reject:    #de350b;
+
+    --pair-a: #0052cc;                  /* CVD-safe diverging pair, skill charts */
+    --pair-b: #d9730d;
+
+    --warn: #974f0c;  --danger: #de350b;  --danger-bg: #ffebe6;  --pos: #216e4e;
+
+    /* activity heatmap: sequential, single hue, light -> dark */
+    --hm-0: #dfe3db; --hm-1: #74c0a1; --hm-2: #4a9f7f; --hm-3: #258260; --hm-4: #066a47;
+
+    --focus: var(--ink);
+    --shadow-card:   0 1px 2px rgb(22 25 28 / .10);
+    --shadow-dialog: 0 12px 32px rgb(22 25 28 / .22);
+
+    --font-display: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono",
+                    Menlo, Consolas, "Liberation Mono", monospace;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    --t-xs: 11px; --t-sm: 12px; --t-md: 13px;
+    --t-lg: 15px; --t-xl: 18px; --t-2xl: 24px;
+
+    --r-sm: 3px; --r-md: 6px; --r-pill: 999px;
+  }
+
+  /* Dark is a SELECTED palette, not an inversion of the light one. The stage four
+     were re-stepped into the dark lightness band (OKLCH L .48-.67) and re-validated
+     all-pairs: worst CVD dE 10.0 (deutan, offer<->interview) and normal-vision
+     dE 20.5 — both clear the light set's bar of 9.2 / 18.2.
+     The obvious lift fails: a salmon #ff7452 for reject collapses to dE 14.3
+     against a lifted orange, because lightening a vermilion walks its hue toward
+     interview. Keep reject a deep vermilion. Re-run validate_palette.js
+     --mode dark --surface "#232723" --pairs all after any change here. */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #171a17;  --sunk: #1e221e;  --surface: #232723;
+    --ink: #e8ebe4;  --ink-2: #a3aca0;  --ink-3: #8d968a;
+    --rule: #333a32;  --rule-strong: #4a5348;
+    --stage-applied: #288cf8;  --stage-interview: #cc800c;
+    --stage-offer:   #14ac74;  --stage-reject:    #b81400;
+    --pair-a: #288cf8;  --pair-b: #cc800c;
+    --warn: #e0a76a;  --danger: #ff7a66;  --danger-bg: #3a1c15;  --pos: #57d9a3;
+    --hm-0: #1e221e; --hm-1: #397962; --hm-2: #5b9b82; --hm-3: #7bbba1; --hm-4: #9bdbc0;
+    --shadow-card:   0 1px 2px rgb(0 0 0 / .40);
+    --shadow-dialog: 0 12px 32px rgb(0 0 0 / .55);
+  }
+
+  * { box-sizing: border-box; }
+  body { font-family: var(--font-ui); font-size: var(--t-md); margin: 0;
+         background: var(--ground); color: var(--ink);
+         height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* One focus treatment for the whole app. Achromatic so it can never be mistaken
+     for a stage color. Replaces the single .seg rule this file used to have. */
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
+
+  /* Applied for one frame while the theme flips. Two reasons: a theme switch has no
+     business animating every element on the page, and Firefox will not commit a
+     transitioned property whose value comes from a custom property that just changed
+     — buttons and tabs keep their old colors until something else forces a restyle. */
+  .theme-switching, .theme-switching * { transition: none !important; }
+
+  /* --- buttons: two kinds, grouped by role rather than restyled per id --- */
+  button { font: inherit; cursor: pointer; }
+  #syncBtn, #addPanel > summary, #add button, #editForm button.save, #mktScan {
+    padding: 7px 14px; border: 1px solid var(--ink); border-radius: var(--r-sm);
+    background: var(--ink); color: var(--ground);
+    font-family: var(--font-display); font-size: var(--t-sm); letter-spacing: -.01em;
+    transition: background-color .12s, color .12s, border-color .12s;
+  }
+  /* .mkt-actions button covers Check postings/alive/new; #mktScan outranks it and
+     stays primary, since scanning is the action that tab exists for. */
+  #authBtn, #themeBtn, #mktSave, #editForm button.cancel, .mkt-actions button {
+    padding: 7px 14px; border: 1px solid var(--rule-strong); border-radius: var(--r-sm);
+    background: transparent; color: var(--ink);
+    font-family: var(--font-display); font-size: var(--t-sm); letter-spacing: -.01em;
+    transition: background-color .12s, color .12s, border-color .12s;
+  }
+  #authBtn:hover, #themeBtn:hover, #mktSave:hover,
+  #editForm button.cancel:hover, .mkt-actions button:hover { background: var(--sunk); }
+  #syncBtn:hover, #addPanel > summary:hover, #add button:hover,
+  #editForm button.save:hover, #mktScan:hover { background: var(--ink-2); border-color: var(--ink-2); }
+  button.job:disabled { opacity: .5; cursor: progress; }
+
+  input, textarea, select {
+    padding: 7px 9px; border: 1px solid var(--rule-strong); border-radius: var(--r-sm);
+    background: var(--surface); color: var(--ink); font: inherit;
+  }
+  input[type=date] { font-family: var(--font-display); font-size: var(--t-sm); }
+
+  /* --- header: one row, ~52px. The wordmark is the display face's first outing. --- */
+  header { display: flex; align-items: center; gap: 16px; padding: 0 20px; min-height: 52px;
+           background: var(--surface); border-bottom: 1px solid var(--rule); }
+  h1 { margin: 0; font-family: var(--font-display); font-size: var(--t-xl); font-weight: 500;
+       letter-spacing: -.02em; text-transform: uppercase; white-space: nowrap; }
+  .sync { margin-left: auto; display: flex; align-items: center; gap: 8px;
+          font-size: var(--t-sm); color: var(--ink-2); white-space: nowrap; }
+  #lastSynced { font-family: var(--font-display); color: var(--ink-3); margin-right: 4px; }
+
+  /* The add form is a popover, not an inline row: the shell is fixed-height, so a
+     disclosure that reflows the header pushes every view down by its own height.
+     position:relative here keeps #addPanel the containing block (see the .seg note). */
+  #addPanel { position: relative; }
+  #addPanel > summary { display: inline-block; list-style: none; user-select: none; }
+  #addPanel > summary::-webkit-details-marker { display: none; }
+  #add { position: absolute; top: calc(100% + 8px); left: 0; z-index: 20;
+         display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+         padding: 12px; background: var(--surface);
+         border: 1px solid var(--rule); border-radius: var(--r-md); box-shadow: var(--shadow-dialog); }
+
+  /* --- tabs --- */
+  .tabs { display: flex; gap: 2px; padding: 0 20px; background: var(--surface);
+          border-bottom: 1px solid var(--rule); }
+  .tabs button { padding: 9px 12px; border: 0; border-bottom: 2px solid transparent;
+                 background: transparent; color: var(--ink-2);
+                 font-family: var(--font-display); font-size: var(--t-sm);
+                 text-transform: uppercase; letter-spacing: .06em;
+                 transition: color .12s, border-color .12s; }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button.active { color: var(--ink); border-bottom-color: var(--ink); }
+  .view { display: none; }
+  .view.active { display: grid; }              /* board is a grid; other views override below */
+  #timing.active, #heatmap.active, #flow.active, #market.active, #salary.active, #resume.active {
+    display: block; flex: 1; min-height: 0; overflow: auto; padding: 24px 20px;
+  }
+
+  /* --- board --- */
+  /* No `display` here on purpose: .board and .view have equal specificity, so a
+     display:grid on this rule would out-order .view{display:none} and the board would
+     never hide when another tab is active. .view.active supplies the grid. */
+  .board { flex: 1; min-height: 0; grid-template-columns: repeat(4, 1fr);
+           gap: 12px; padding: 20px; }
+  .column { background: var(--sunk); border-radius: var(--r-md); padding: 8px;
+            display: flex; flex-direction: column; min-height: 0; }
+  /* The one place hue appears on the board: a rule identifying the stage. */
+  .column::before { content: ""; display: block; height: 2px; border-radius: 1px;
+                    background: var(--stage, var(--rule-strong)); margin: 0 2px 8px; }
+  .column[data-status="applied"]      { --stage: var(--stage-applied); }
+  .column[data-status="interviewing"] { --stage: var(--stage-interview); }
+  .column[data-status="offer"]        { --stage: var(--stage-offer); }
+  .column[data-status="rejected"]     { --stage: var(--stage-reject); }
+  .column h2 { margin: 0 4px 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .col-name { font-family: var(--font-display); font-size: var(--t-xs); text-transform: uppercase;
+              letter-spacing: .08em; color: var(--ink-2); font-weight: 400; }
+  .col-n { font-family: var(--font-display); font-size: var(--t-lg); color: var(--ink);
+           font-variant-numeric: tabular-nums; }
+  .dropzone { flex: 1; min-height: 60px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .dropzone:empty::after { content: "—"; color: var(--ink-3); font-family: var(--font-display);
+                           font-size: var(--t-sm); padding: 8px 6px; }
+  .dropzone.over { outline: 2px dashed var(--ink-3); outline-offset: -2px; border-radius: var(--r-sm); }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r-md);
+          padding: 10px 48px 10px 10px; box-shadow: var(--shadow-card); cursor: grab; position: relative;
+          transition: border-color .12s, box-shadow .12s; }
+  .card:hover { border-color: var(--rule-strong); }
+  .card.dragging { opacity: .4; }
+  .card .company { font-weight: 600; line-height: 1.3; }
+  .card .title { font-size: var(--t-sm); color: var(--ink-2); line-height: 1.35; margin-top: 1px; }
+  .card .date { font-family: var(--font-display); font-size: var(--t-xs); color: var(--ink-3);
+                margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .card .meta { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .card .del, .card .edit { position: absolute; top: 5px; width: 20px; height: 20px; border: 0;
+                            background: transparent; color: var(--ink-3); line-height: 1;
+                            border-radius: var(--r-sm); transition: color .12s, background-color .12s; }
+  .card .del { right: 5px; font-size: var(--t-lg); }
+  .card .edit { right: 27px; font-size: var(--t-md); }
+  .card .del:hover { color: var(--danger); background: var(--sunk); }
+  .card .edit:hover { color: var(--ink); background: var(--sunk); }
+  .milestone { display: flex; align-items: center; gap: 6px; font-size: var(--t-xs); color: var(--ink-2); }
+  .milestone .ms-label { min-width: 58px; font-family: var(--font-display); text-transform: uppercase;
+                         letter-spacing: .06em; color: var(--ink-3); }
+  .milestone .ms-date { padding: 1px 3px; font-family: var(--font-display); font-size: var(--t-xs);
+                        border: 1px solid var(--rule); border-radius: var(--r-sm); background: transparent; }
+  .milestone .ms-days { margin-left: auto; font-family: var(--font-display); font-weight: 600;
+                        color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  /* --- edit dialog --- */
+  dialog { border: 1px solid var(--rule); border-radius: var(--r-md); padding: 20px;
+           background: var(--surface); color: var(--ink); box-shadow: var(--shadow-dialog); }
+  dialog::backdrop { background: rgb(0 0 0 / .45); }
+  #editForm { display: flex; flex-direction: column; gap: 10px; min-width: 280px; }
+  #editForm h2 { margin: 0 0 2px; font-family: var(--font-display); font-size: var(--t-md);
+                 font-weight: 500; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); }
+  #editForm menu { display: flex; justify-content: flex-end; gap: 8px; margin: 4px 0 0; padding: 0; }
+  #editMilestones { display: flex; flex-direction: column; gap: 8px; }
+  .edit-ms { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); }
+  .edit-ms .lbl { min-width: 64px; font-family: var(--font-display); text-transform: uppercase;
+                  letter-spacing: .06em; font-size: var(--t-xs); color: var(--ink-2); }
+  .edit-ms .val { flex: 1; }
+  .edit-ms .clear { padding: 4px 10px; border: 0; border-radius: var(--r-sm);
+                    background: var(--danger-bg); color: var(--danger);
+                    font-family: var(--font-display); font-size: var(--t-xs); }
+  .edit-ms .clear:hover { filter: brightness(.94); }
+
+  /* --- activity heatmap --- */
+  .hm-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 12px);
+             grid-auto-columns: 12px; gap: 3px; }
+  .hm-cell { width: 12px; height: 12px; border-radius: 2px; background: var(--hm-0); }
+  .hm-cell.l1 { background: var(--hm-1); } .hm-cell.l2 { background: var(--hm-2); }
+  .hm-cell.l3 { background: var(--hm-3); } .hm-cell.l4 { background: var(--hm-4); }
+  .hm-cell.blank { background: transparent; }
+  .hm-tip { position: fixed; z-index: 30; pointer-events: none; display: none;
+            background: var(--ink); color: var(--ground); font-family: var(--font-display);
+            font-size: var(--t-xs); padding: 4px 8px; border-radius: var(--r-sm);
+            white-space: nowrap; transform: translate(-50%, -140%); }
+  /* Month names sit on a 12px column grid; the display face is wider than that and
+     ran adjacent labels into each other, so these keep the UI face. */
+  .hm-months, .hm-days { font-family: var(--font-ui); color: var(--ink-3); }
+  .hm-legend { font-family: var(--font-display); color: var(--ink-3); }
+  .hm-months { display: grid; grid-auto-flow: column; grid-auto-columns: 12px; gap: 3px;
+               font-size: var(--t-xs); margin: 0 0 4px 30px; }
+  .hm-row { display: flex; }
+  .hm-days { display: grid; grid-template-rows: repeat(7, 12px); gap: 3px;
+             font-size: 9px; margin-right: 6px; width: 24px; }
+  .hm-days span { line-height: 12px; }
+  .hm-legend { display: flex; align-items: center; gap: 4px; font-size: var(--t-xs); margin: 12px 0 0 30px; }
+  .hm-legend .hm-cell { display: inline-block; }
+
+  /* --- sankey flow --- */
+  .sankey text { font-family: var(--font-display); font-size: var(--t-xs); fill: var(--ink); }
+  .sankey .link { fill: none; stroke-opacity: .35; }
+  .sankey .link:hover { stroke-opacity: .6; }
+
+  /* --- timing --- */
+  .tm-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+              gap: 12px; margin-bottom: 20px; }
+  .tm-tile { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r-md); padding: 12px 14px; }
+  .tm-tile .lbl { font-size: var(--t-sm); color: var(--ink-2); }
+  .tm-tile .val { font-family: var(--font-display); font-size: var(--t-2xl); font-weight: 500;
+                  color: var(--ink); margin-top: 4px; letter-spacing: -.02em;
+                  font-variant-numeric: tabular-nums; }
+  .tm-tile .sub { font-size: var(--t-xs); color: var(--ink-3); margin-top: 2px; }
+  .tm-card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r-md);
+             padding: 16px; margin-bottom: 20px; }
+  .tm-card h2 { margin: 0; font-size: var(--t-lg); font-weight: 600; color: var(--ink); }
+  .tm-card .cap { margin: 3px 0 0; font-size: var(--t-sm); color: var(--ink-2); }
+  .tm-card .plot { margin-top: 10px; }
+  .tm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+             gap: 20px; margin-bottom: 20px; }
+  .tm-grid .tm-card { margin-bottom: 0; }
+  .tm-empty, .mkt-empty { color: var(--ink-2); font-size: var(--t-md); }
+  .tm-empty { padding: 20px 2px; }
+  .mkt-empty { padding: 12px 2px; }
+  .tm-chart text { font-family: var(--font-display); font-size: var(--t-xs); fill: var(--ink-2); }
+  .tm-chart .tick, .tm-chart .cap-val { font-variant-numeric: tabular-nums; }
+  .tm-chart .cap-val { font-size: var(--t-xs); fill: var(--ink-3); }
+  /* Row names are prose (job titles), not data, so they take the UI face — and mono
+     here overran the label gutter the chart's PAD_L reserves, clipping longer titles. */
+  .tm-chart .row-name { font-family: var(--font-ui); font-size: var(--t-sm);
+                        fill: var(--ink); font-weight: 600; }
+  .tm-chart .axis { stroke: var(--rule); stroke-width: 1; }
+  .tm-key { display: flex; gap: 16px; font-family: var(--font-display); font-size: var(--t-xs);
+            color: var(--ink-2); margin-top: 2px; }
+
+  /* --- job search --- */
+  .mkt-profile, .sal-card, .sal-filter { background: var(--surface); border: 1px solid var(--rule);
+                                         border-radius: var(--r-md); margin-bottom: 20px; }
+  .mkt-profile { padding: 16px; }
+  .mkt-profile h2, .sal-card h2 { margin: 0 0 10px; font-size: var(--t-lg); font-weight: 600; }
+  .mkt-fields { display: flex; gap: 20px; flex-wrap: wrap; }
+  .mkt-fields label, .sal-filter label, .res-row label, .sal-skillbar label {
+    display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); color: var(--ink-2); }
+  .mkt-fields textarea { min-width: 240px; resize: vertical; }
+  .mkt-fields fieldset, .sal-filter fieldset { border: 1px solid var(--rule-strong);
+                                               border-radius: var(--r-sm); padding: 6px 12px; }
+  .mkt-fields legend, .sal-filter legend { font-size: var(--t-sm); color: var(--ink-2); padding: 0 4px; }
+  .mkt-fields fieldset label, .sal-filter fieldset label { flex-direction: row; align-items: center;
+                                                           gap: 6px; color: var(--ink); }
+  .mkt-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .mkt-info, .sal-info { font-family: var(--font-display); font-size: var(--t-sm); color: var(--ink-2); }
+  .mkt-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .mkt-filter label { font-size: var(--t-sm); color: var(--ink-2); }
+  .mkt-filter input { flex: 1; max-width: 360px; }
+
+  /* One table style, shared by four unrelated tables — splitting it buys nothing
+     until they actually diverge. */
+  .mkt-table { width: 100%; border-collapse: collapse; background: var(--surface);
+               border: 1px solid var(--rule); border-radius: var(--r-md); overflow: hidden; }
+  .mkt-table th, .mkt-table td { text-align: left; padding: 8px 10px;
+                                 border-bottom: 1px solid var(--rule); font-size: var(--t-md);
+                                 vertical-align: top; }
+  .mkt-table th { background: var(--sunk); color: var(--ink-2); font-family: var(--font-display);
+                  text-transform: uppercase; letter-spacing: .06em; font-size: var(--t-xs); font-weight: 500; }
+  .mkt-table th .sort { background: none; border: 0; padding: 0; font: inherit; color: inherit;
+                        letter-spacing: inherit; text-transform: inherit; }
+  .mkt-table th .sort::after { content: attr(data-arrow); font-size: 8px; padding-left: 5px; vertical-align: middle; }
+  .mkt-table th .sort:hover { color: var(--ink); }
+  .mkt-table tr:last-child td { border-bottom: 0; }
+  .mkt-table tbody tr { transition: background-color .12s; }
+  .mkt-table tbody tr:hover { background: var(--sunk); }
+  .mkt-table .level { text-transform: capitalize; color: var(--ink-2); }
+  .mkt-table .salary { white-space: nowrap; font-family: var(--font-display); font-size: var(--t-sm); }
+  .mkt-table .yrs { text-align: right; color: var(--ink-2); font-family: var(--font-display); }
+  .mkt-table td.num, .mkt-table th.num { text-align: right; font-family: var(--font-display);
+                                         font-variant-numeric: tabular-nums; }
+  .mkt-table a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--rule-strong);
+                 text-underline-offset: 2px; }
+  .mkt-table a:hover { text-decoration-color: currentColor; }
+  .mkt-table .url a { display: block; max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; font-family: var(--font-display); font-size: var(--t-sm); }
+  .mkt-table .del { border: 0; background: transparent; color: var(--ink-3); font-size: var(--t-lg);
+                    line-height: 1; border-radius: var(--r-sm); padding: 0 6px; }
+  .mkt-table .del:hover { color: var(--danger); background: var(--sunk); }
+  .mkt-table .score { font-family: var(--font-display); font-variant-numeric: tabular-nums;
+                      font-weight: 600; color: var(--ink); white-space: nowrap; }
+
+  /* --- salary --- */
+  .sal-filter { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; padding: 14px 16px; }
+  .sal-filter input[type=search] { min-width: 220px; }
+  .sal-filter fieldset { display: flex; gap: 12px; }
+  .sal-filter fieldset label { text-transform: capitalize; }
+  .sal-info { margin-left: auto; align-self: center; }
+  .sal-card { padding: 16px; }
+  .sal-card .mkt-table { margin-bottom: 14px; }
+  /* sequential: rarer = muted ink, more frequent = darker and bigger */
+  .skill-cloud { display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+                 text-align: center; gap: 2px 14px; line-height: 1.15; max-width: 760px; margin: 0 auto 14px; }
+  .skill-cloud span { color: var(--ink-2); white-space: nowrap; }
+  .sal-skillbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .sal-skillbar select { min-width: 220px; }
+
+  /* --- resume analysis --- */
+  .res-text { width: 100%; min-height: 200px; padding: 10px; resize: vertical;
+              font: var(--t-sm)/1.5 var(--font-display); }
+  .res-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .res-row input[type=number] { width: 80px; }
+  .res-row input[type=file] { font-size: var(--t-sm); }
+  .res-note { font-size: var(--t-sm); color: var(--ink-2); }
+  .res-note.warn { color: var(--warn); }
+  .res-note.err { color: var(--danger); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chips span { font-family: var(--font-display); font-size: var(--t-xs); background: var(--sunk);
+                border: 1px solid var(--rule); border-radius: var(--r-pill); padding: 2px 9px; color: var(--ink); }
+  .chips span.lack { background: transparent; border-color: var(--warn); color: var(--warn); }
+  .chips span.chips-label { border: 0; background: transparent; padding-left: 0; }
+  .chip-x { border: 0; background: transparent; color: var(--ink-2); cursor: pointer;
+            font: inherit; line-height: 1; padding: 0 0 0 6px; }
+  .chip-x:hover { color: var(--danger); }
+  #resume [inert] { opacity: .5; }
+  /* one Off/Low/Normal/High segmented control per scoring feature. Radios, not a slider:
+     the score is a *normalized* weighted average, so only the ratios between features
+     mean anything — a 0-100 readout invited people to read absolute importance into it. */
+  /* Flex, not grid: a grid track sized minmax(Npx, 1fr) stays Npx wide even when the
+     control needs more, so the last column ran off the card edge at larger font sizes.
+     A flex item won't shrink below its own min-content — it wraps to the next line. */
+  .res-weights { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-bottom: 8px; }
+  /* Rows size to their content, so the label always sits one fixed gap from its control.
+     The em-based label column keeps them aligned into columns at any font size. */
+  .res-weights .wrow { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
+                       font-size: var(--t-sm); color: var(--ink-2); }
+  .res-weights .wname { flex: none; min-width: 5.5em; }
+  .seg { display: flex; flex: none; border: 1px solid var(--rule-strong); border-radius: var(--r-sm);
+         overflow: hidden; background: var(--surface); }
+  /* Zero-sized but still IN FLOW. Hiding these with position:absolute made the body their
+     containing block, so focusing one on click scrolled the window instead of #resume and
+     slid the whole fixed-height layout off screen. */
+  .seg input { appearance: none; width: 0; height: 0; margin: 0; padding: 0; border: 0; }
+  .seg label { padding: 3px 9px; font-family: var(--font-display); font-size: var(--t-xs);
+               color: var(--ink-2); cursor: pointer; border-left: 1px solid var(--rule);
+               user-select: none; transition: background-color .12s, color .12s; }
+  .seg label:first-of-type { border-left: 0; }
+  .seg input:checked + label { background: var(--ink); color: var(--ground); border-left-color: var(--ink); }
+  .seg input:focus-visible + label { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .delta { font-family: var(--font-display); font-size: var(--t-xs); font-weight: 600; margin-left: 5px; }
+  .delta.up { color: var(--pos); }
+  .delta.down { color: var(--ink-3); }
+  .res-toggles { display: flex; gap: 18px; flex-wrap: wrap; font-size: var(--t-sm);
+                 color: var(--ink); margin-bottom: 12px; }
+  .res-toggles label { display: flex; align-items: center; gap: 6px; }
+  .feat { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: var(--t-xs); color: var(--ink-2); }
+  .feat b { font-family: var(--font-display); font-weight: 600; color: var(--ink);
+            font-variant-numeric: tabular-nums; }
+  .feat .off { color: var(--ink-3); }
+
+  /* --- responsive: the viewport meta was here from the start, the breakpoints weren't --- */
+  @media (max-width: 900px) {
+    .board { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 560px) {
+    .board { grid-template-columns: 1fr; overflow-y: auto; }
+    header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; }
+    .sync { width: 100%; margin-left: 0; justify-content: flex-start; flex-wrap: wrap; }
+    .tabs { overflow-x: auto; padding: 0 12px; }
+    .tabs button { white-space: nowrap; }
+    #timing.active, #heatmap.active, #flow.active,
+    #market.active, #salary.active, #resume.active { padding: 16px 12px; }
+  }
+</style>
+<script>
+  /* Set the theme before first paint so a dark reload never flashes light.
+     JS owns the attribute in both directions, which is why there's no
+     prefers-color-scheme block above — one source of truth, no duplicated tokens. */
+  document.documentElement.dataset.theme = localStorage.theme
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+</script>
+</head>
+<body>
+<header>
+  <h1>Unemployment Stack</h1>
+  <details id="addPanel">
+    <summary>+ Add job</summary>
+    <form id="add">
+      <input name="company" placeholder="Company" required>
+      <input name="title" placeholder="Job title" required>
+      <input name="applied_date" type="date" required>
+      <button type="submit">Add</button>
+    </form>
+  </details>
+  <div class="sync">
+    <span id="lastSynced">Last synced: —</span>
+    <button id="themeBtn">Dark</button>
+    <button id="authBtn" class="job">Reconnect Gmail</button>
+    <button id="syncBtn" class="job">Sync</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button id="tabBoard" class="active">Board</button>
+  <button id="tabTiming">Timing</button>
+  <button id="tabActivity">Activity</button>
+  <button id="tabFlow">Flow</button>
+  <button id="tabMarket">Job search</button>
+  <button id="tabSalary">Salary</button>
+  <button id="tabResume">Resume analysis</button>
+</nav>
+
+<main class="board view active" id="board"></main>
+<section class="view" id="timing"></section>
+<section class="view" id="heatmap"></section>
+<section class="view" id="flow"></section>
+<section class="view" id="market"></section>
+<section class="view" id="salary"></section>
+<section class="view" id="resume"></section>
+
+<dialog id="editDialog">
+  <form id="editForm">
+    <h2>Edit application</h2>
+    <input name="company" placeholder="Company" required>
+    <input name="title" placeholder="Job title" required>
+    <input name="applied_date" type="date" required>
+    <div id="editMilestones"></div>
+    <menu>
+      <button type="button" class="cancel" id="editCancel">Cancel</button>
+      <button type="submit" class="save">Save</button>
+    </menu>
+  </form>
+</dialog>
+
+<script>
+const COLUMNS = [
+  ["applied", "Applied"],
+  ["interviewing", "Interviewing"],
+  ["offer", "Offer"],
+  ["rejected", "Rejected"],
+];
+
+const MILESTONES = [
+  ["interview_date", "Interview"],
+  ["offer_date", "Offer"],
+  ["rejected_date", "Rejected"],
+];
+
+// Series colors, shared by the Flow and Timing tabs so a stage keeps one hue app-wide.
+// These resolve through CSS custom properties rather than holding hex: every chart here
+// is inline SVG in the live DOM, so var() works in fill=/stroke= presentation attributes.
+// That means light and dark come from one source of truth in :root, and no chart function
+// has to know which theme is active. The hex values, and the CVD reasoning behind both
+// sets, live next to the tokens in the <style> block above.
+const C_APPLIED   = "var(--stage-applied)";
+const C_INTERVIEW = "var(--stage-interview)";
+const C_OFFER     = "var(--stage-offer)";
+const C_REJECT    = "var(--stage-reject)";
+
+/**
+ * Whole days between two dates.
+ * @param {string} from - a YYYY-MM-DD date.
+ * @param {string} to - a YYYY-MM-DD date.
+ * @returns {number} the difference, rounded; negative if `to` precedes `from`.
+ */
+const elapsedDays = (from, to) =>
+  Math.round((new Date(to) - new Date(from)) / 86400000);
+
+/**
+ * Today's local date, formatted the way the server stamps dates.
+ * @returns {string} YYYY-MM-DD — en-CA formats that way.
+ */
+const todayISO = () => new Date().toLocaleDateString("en-CA");
+
+/**
+ * One JSON call to the app's own API.
+ * @param {string} method - the HTTP method.
+ * @param {string} path - the endpoint, e.g. "/api/jobs".
+ * @param {object} [body] - sent as JSON; omit for a request with no body.
+ * @returns {Promise<any>} the parsed response.
+ * @throws {Error} carrying the server's `error` field, or the status text, on any
+ *   non-2xx response.
+ */
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+// --- long jobs -------------------------------------------------------------
+// A scan/check/sync runs on its own thread server-side and writes the same
+// databases, so the server allows only one at a time (409 otherwise) and the UI
+// disables every job button while one runs. The flag lives out here because
+// switching tabs re-renders a view and rebuilds its buttons from scratch —
+// paintBusy() puts the running state back on the new nodes, so the UI matches
+// the run that is still in flight.
+let busy = null;                  // { id, label, elapsed } of the running job's button
+
+/**
+ * Start a background job on the server and poll until it finishes.
+ *
+ * The POST returns 202 straight away, so nothing sits on an open connection waiting
+ * for a multi-minute run. Polling is a fixed 1s tick that reports elapsed seconds
+ * only — real progress lives in tqdm on the app's terminal, and surfacing it here
+ * would mean capturing the subprocess's stdout.
+ *
+ * @param {string} method - the HTTP method for the kick-off request.
+ * @param {string} path - the endpoint that starts the job.
+ * @param {object} [body] - the kick-off request's body.
+ * @returns {Promise<any>} the finished job's result.
+ * @throws {Error} if the kick-off is refused (409 when a job is already running, 400
+ *   on a bad request) or if the job itself fails.
+ */
+async function runRemote(method, path, body) {
+  await api(method, path, body);
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1000));
+    const s = await api("GET", "/api/job");
+    if (s.done) {
+      if (s.error) throw new Error(s.error);
+      return s.result;
+    }
+    if (busy) { busy.elapsed = s.elapsed; paintBusy(); }
+  }
+}
+
+/**
+ * Format a running total for the button label.
+ * @param {number} sec - elapsed seconds.
+ * @returns {string} "8s" under a minute, "1m 20s" past it.
+ */
+function fmtElapsed(sec) {
+  const s = Math.round(sec || 0);
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * Push the current `busy` state onto whatever nodes are in the DOM right now.
+ *
+ * Called after every render as well as on each poll, because a re-render rebuilds
+ * the buttons from scratch and they come back enabled. Controls marked
+ * [data-job-lock] go `inert` for the duration — edits there would be overwritten by
+ * a run that rewrites the same column. They are locked during any job, not only the
+ * one that touches them.
+ *
+ * @returns {void} disables every .job button, inerts every locked control, and
+ *   writes the running label and elapsed time onto the button that started the job.
+ */
+function paintBusy() {
+  for (const b of document.querySelectorAll("button.job")) b.disabled = !!busy;
+  for (const el of document.querySelectorAll("[data-job-lock]")) el.inert = !!busy;
+  const b = busy && document.getElementById(busy.id);
+  if (b) b.textContent = busy.elapsed ? `${busy.label} ${fmtElapsed(busy.elapsed)}` : busy.label;
+}
+
+/**
+ * Run an async action with the whole UI in its busy state.
+ * @param {HTMLElement} btn - the button that started it; its id identifies it across
+ *   re-renders, and its text is restored afterwards.
+ * @param {string} label - what to show on the button while it runs.
+ * @param {() => Promise<any>} fn - the work.
+ * @returns {Promise<any>} fn's result. The busy state is always cleared, even if fn
+ *   throws, and the idle label is put back on the live node — fn may have re-rendered
+ *   the original away.
+ */
+async function runJob(btn, label, fn) {
+  const idle = btn.textContent;
+  busy = { id: btn.id, label, elapsed: 0 };
+  paintBusy();
+  try {
+    return await fn();
+  } finally {
+    busy = null;
+    paintBusy();
+    const now = document.getElementById(btn.id);
+    if (now) now.textContent = idle;
+  }
+}
+
+/**
+ * Build one draggable application card.
+ * @param {object} job - a row from /api/jobs.
+ * @returns {HTMLElement} the card, wired up: the milestone date inputs PATCH on
+ *   change (reverting on failure), the × deletes the job, the ✎ opens the edit
+ *   dialog, and dragstart/dragend carry the id for the board's drop zones.
+ */
+function cardEl(job) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.draggable = true;
+  el.dataset.id = job.id;
+  el.innerHTML = `<button class="edit" title="Edit" aria-label="Edit">&#9998;</button>
+    <button class="del" title="Delete" aria-label="Delete">&times;</button>
+    <div class="company"></div><div class="title"></div><div class="date"></div>
+    <div class="meta"></div>`;
+  el.querySelector(".company").textContent = job.company;
+  el.querySelector(".title").textContent = job.title;
+  const dateEl = el.querySelector(".date");
+  dateEl.textContent = job.applied_date;
+  if (job.status === "applied")
+    dateEl.textContent += ` · ${elapsedDays(job.applied_date, todayISO())}d ago`;
+
+  const meta = el.querySelector(".meta");
+  for (const [field, label] of MILESTONES) {
+    if (!job[field]) continue;
+    const row = document.createElement("label");
+    row.className = "milestone";
+    row.innerHTML = `<span class="ms-label"></span><input type="date" class="ms-date"><span class="ms-days"></span>`;
+    row.querySelector(".ms-label").textContent = label;
+    const input = row.querySelector(".ms-date");
+    const days = row.querySelector(".ms-days");
+    input.value = job[field];
+    // days from application to this milestone, blank when the date is cleared
+    const showDays = () => days.textContent = input.value ? elapsedDays(job.applied_date, input.value) + "d" : "";
+    showDays();
+    input.addEventListener("change", async () => {
+      try {
+        await api("PATCH", `/api/jobs/${job.id}`, { [field]: input.value });
+        job[field] = input.value;
+        showDays();
+      } catch (err) {
+        alert("Could not update date: " + err.message);
+        input.value = job[field];  // revert on failure
+        showDays();
+      }
+    });
+    meta.appendChild(row);
+  }
+  el.querySelector(".del").onclick = async () => {
+    await api("DELETE", `/api/jobs/${job.id}`);
+    el.remove();  // :empty CSS restores the placeholder if the column empties
+  };
+  el.querySelector(".edit").onclick = () => openEdit(job);
+  el.addEventListener("dragstart", e => {
+    e.dataTransfer.setData("text/plain", job.id);
+    el.classList.add("dragging");
+  });
+  el.addEventListener("dragend", () => el.classList.remove("dragging"));
+  return el;
+}
+
+/**
+ * Draw the kanban board: one column per status, filled with cards.
+ * @param {object[]} jobs - every row from /api/jobs.
+ * @returns {void} replaces #board's contents. Each column is a drop zone: a drop
+ *   moves the card optimistically, PATCHes the new status, then reloads so the
+ *   server-stamped milestone date shows — and reloads on failure too, to resync.
+ */
+function render(jobs) {
+  const board = document.getElementById("board");
+  board.innerHTML = "";
+  for (const [status, label] of COLUMNS) {
+    const col = document.createElement("section");
+    col.className = "column";
+    col.dataset.status = status;                  // picks the stage hue for the column rule
+    col.innerHTML = `<h2><span class="col-name"></span><span class="col-n"></span></h2><div class="dropzone"></div>`;
+    const inColumn = jobs.filter(j => j.status === status);
+    col.querySelector(".col-name").textContent = label;
+    col.querySelector(".col-n").textContent = inColumn.length;
+    const zone = col.querySelector(".dropzone");
+    inColumn.forEach(j => zone.appendChild(cardEl(j)));
+
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+    zone.addEventListener("drop", async e => {
+      e.preventDefault();
+      zone.classList.remove("over");
+      const id = e.dataTransfer.getData("text/plain");
+      const card = document.querySelector(`.card[data-id="${id}"]`);
+      if (!card || card.parentElement === zone) return;
+      zone.appendChild(card);                       // optimistic move
+      try {
+        await api("PATCH", `/api/jobs/${id}`, { status });
+        load();                                     // refresh to show the stamped milestone date
+      } catch (err) {
+        alert("Could not move card: " + err.message);
+        load();                                     // resync from server on failure
+      }
+    });
+    board.appendChild(col);
+  }
+}
+
+let allJobs = [];
+
+/**
+ * Fetch every application and redraw whatever is on screen.
+ * @returns {Promise<void>} refreshes the module-level allJobs, redraws the board,
+ *   and re-renders whichever other view is currently active.
+ */
+async function load() {
+  allJobs = await api("GET", "/api/jobs");
+  render(allJobs);
+  for (const v of Object.values(VIEWS))
+    if (document.getElementById(v.el).classList.contains("active")) v.render();
+}
+
+// --- activity heatmap (GitHub-style, last ~53 weeks, computed client-side) ---
+const HM_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+const hmTip = document.body.appendChild(Object.assign(document.createElement("div"), { className: "hm-tip" }));
+
+/**
+ * Draw the activity heatmap: applications per day over the last 53 weeks.
+ * @param {object[]} jobs - every row from /api/jobs; only applied_date is read.
+ * @returns {void} replaces #heatmap with the month labels, the day grid, a legend
+ *   and a total. Cells carry their own tooltip text and share one mousemove
+ *   handler, because the native `title` tooltip has a ~1s delay.
+ */
+function renderHeatmap(jobs) {
+  const counts = new Map();                       // YYYY-MM-DD -> applications that day
+  for (const j of jobs)
+    if (j.applied_date) counts.set(j.applied_date, (counts.get(j.applied_date) || 0) + 1);
+
+  const parse = s => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+  const iso = dt => dt.toLocaleDateString("en-CA");
+  const today = parse(todayISO());
+  const start = new Date(today);                  // Sunday of today's week, 52 weeks back -> 53 columns
+  start.setDate(start.getDate() - start.getDay() - 52 * 7);
+
+  const grid = document.createElement("div");
+  grid.className = "hm-grid";
+  const months = document.createElement("div");
+  months.className = "hm-months";
+  let prevMonth = -1, total = 0;
+
+  for (let col = 0; col <= 52; col++) {
+    const colDate = new Date(start);
+    colDate.setDate(start.getDate() + col * 7);
+    const lbl = document.createElement("span");
+    lbl.textContent = colDate.getMonth() !== prevMonth ? HM_MONTHS[colDate.getMonth()] : "";
+    prevMonth = colDate.getMonth();
+    months.appendChild(lbl);
+
+    for (let row = 0; row < 7; row++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + col * 7 + row);
+      const cell = document.createElement("div");
+      if (d > today) { cell.className = "hm-cell blank"; grid.appendChild(cell); continue; }
+      const key = iso(d), n = counts.get(key) || 0;
+      total += n;
+      cell.className = "hm-cell" + (n ? " l" + Math.min(n, 4) : "");
+      cell.dataset.tip = `${n} application${n === 1 ? "" : "s"} on ${key}`;
+      grid.appendChild(cell);
+    }
+  }
+
+  grid.addEventListener("mousemove", e => {                 // instant tooltip (native title has a ~1s delay)
+    const c = e.target.closest(".hm-cell");
+    if (!c || !c.dataset.tip) { hmTip.style.display = "none"; return; }
+    hmTip.textContent = c.dataset.tip;
+    hmTip.style.left = e.clientX + "px";
+    hmTip.style.top = e.clientY + "px";
+    hmTip.style.display = "block";
+  });
+  grid.addEventListener("mouseleave", () => hmTip.style.display = "none");
+
+  const days = document.createElement("div");
+  days.className = "hm-days";
+  for (const t of ["", "Mon", "", "Wed", "", "Fri", ""]) {
+    const s = document.createElement("span"); s.textContent = t; days.appendChild(s);
+  }
+  const rowWrap = document.createElement("div");
+  rowWrap.className = "hm-row";
+  rowWrap.append(days, grid);
+
+  const legend = document.createElement("div");
+  legend.className = "hm-legend";
+  legend.append("Less");
+  for (const c of ["", "l1", "l2", "l3", "l4"]) {
+    const sw = document.createElement("span"); sw.className = "hm-cell " + c; legend.appendChild(sw);
+  }
+  legend.append("More");
+
+  const heading = document.createElement("p");
+  heading.style.cssText = "font-family:var(--font-display);font-size:12px;color:var(--ink-2);margin:0 0 12px 30px;";
+  heading.textContent = `${total} application${total === 1 ? "" : "s"} in the last year`;
+
+  const root = document.getElementById("heatmap");
+  root.innerHTML = "";
+  root.append(heading, months, rowWrap, legend);
+}
+
+// --- application funnel (Sankey, hand-rolled SVG, computed client-side) ---
+const FLOW_NODES = [
+  { id: "applied",      label: "Applied",      col: 0, color: C_APPLIED },
+  { id: "interviewing", label: "Interviewing", col: 1, color: C_INTERVIEW },
+  { id: "awaiting",     label: "Awaiting",     col: 1, color: "var(--ink-2)" },
+  { id: "ghosted",      label: "Ghosted",      col: 1, color: "var(--ink-3)" },
+  { id: "offer",        label: "Offer",        col: 2, color: C_OFFER },
+  { id: "rejected",     label: "Rejected",     col: 3, color: C_REJECT },
+];
+const GHOST_DAYS = 30;   // no reply after this long counts as ghosted
+
+/**
+ * Reconstruct each job's path through the funnel from its milestone dates.
+ * @param {object[]} jobs - every row from /api/jobs.
+ * @param {Date} today - the reference date, for ageing the still-open ones.
+ * @returns {{from: string, to: string, value: number}[]} one link per distinct
+ *   from→to pair, with `value` counting the jobs that took it. Exactly one edge
+ *   leaves "applied" per job; a job still sitting at applied goes to "awaiting" or,
+ *   past GHOST_DAYS, to "ghosted". Jobs actively interviewing or holding an offer
+ *   rest at their node with no outgoing edge.
+ */
+function computeFlows(jobs, today) {
+  const links = {};
+  const add = (f, t) => links[f + "|" + t] = (links[f + "|" + t] || 0) + 1;
+  for (const j of jobs) {
+    const hi = !!j.interview_date, ho = !!j.offer_date, hr = !!j.rejected_date;
+    if (hi) add("applied", "interviewing");          // out of applied: exactly one edge
+    else if (ho) add("applied", "offer");            // offer without a recorded interview
+    else if (hr) add("applied", "rejected");         // rejected straight from applied
+    else if (j.status === "applied") {
+      const [y, m, d] = j.applied_date.split("-").map(Number);
+      const age = Math.floor((today - new Date(y, m - 1, d)) / 86400000);
+      add("applied", age >= GHOST_DAYS ? "ghosted" : "awaiting");
+    }
+    if (hi) { if (ho) add("interviewing", "offer"); else if (hr) add("interviewing", "rejected"); }
+    if (ho && hr) add("offer", "rejected");          // active interviewing/offer rest at their node
+  }
+  return Object.entries(links).map(([k, value]) => {
+    const [from, to] = k.split("|"); return { from, to, value };
+  });
+}
+
+/**
+ * Draw the application funnel as a hand-rolled Sankey diagram.
+ * @param {object[]} jobs - every row from /api/jobs.
+ * @returns {void} replaces #flow with the SVG, or with an empty-state line when
+ *   there are no applications. Nodes are scaled so the busiest column fills the
+ *   height, then stacked and centred; links are drawn first so the nodes sit on top,
+ *   and stacked in node order to limit crossings.
+ */
+function renderFlow(jobs) {
+  const root = document.getElementById("flow");
+  const [y, m, d] = todayISO().split("-").map(Number);
+  const links = computeFlows(jobs, new Date(y, m - 1, d));
+  if (!links.length) { root.innerHTML = `<p style="color:var(--ink-2)">No applications yet.</p>`; return; }
+
+  const inflow = {}, outflow = {};
+  for (const l of links) {
+    outflow[l.from] = (outflow[l.from] || 0) + l.value;
+    inflow[l.to] = (inflow[l.to] || 0) + l.value;
+  }
+  const nodes = {};
+  for (const def of FLOW_NODES) {
+    const value = Math.max(inflow[def.id] || 0, outflow[def.id] || 0);
+    if (value) nodes[def.id] = { ...def, value };
+  }
+  const present = Object.values(nodes);
+  const lastCol = Math.max(...present.map(n => n.col));
+
+  const W = Math.max(640, root.clientWidth - 40), H = 440, NODE_W = 14, GAP = 16;
+  const colX = c => 10 + c * ((W - 20 - NODE_W) / 3);
+
+  // scale so the busiest column fills the height, then stack & center each column
+  const cols = {};
+  for (const n of present) (cols[n.col] ||= []).push(n);
+  const ppu = Math.min(...Object.values(cols).map(
+    ns => (H - (ns.length - 1) * GAP) / ns.reduce((s, n) => s + n.value, 0)));
+  for (const ns of Object.values(cols)) {
+    const block = ns.reduce((s, n) => s + n.value * ppu, 0) + (ns.length - 1) * GAP;
+    let yy = Math.max(10, (H - block) / 2);
+    for (const n of ns) {
+      n.x = colX(n.col); n.h = n.value * ppu; n.y = yy;
+      n.sCur = yy; n.tCur = yy;                     // source/target stacking cursors
+      yy += n.h + GAP;
+    }
+  }
+
+  let svg = `<svg class="sankey" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+  // links first so nodes sit on top; stack by node order to limit crossings
+  for (const def of FLOW_NODES) {
+    if (!nodes[def.id]) continue;
+    for (const l of links.filter(l => l.from === def.id)) {
+      const s = nodes[l.from], t = nodes[l.to], th = l.value * ppu;
+      const y0 = s.sCur + th / 2, y1 = t.tCur + th / 2;
+      s.sCur += th; t.tCur += th;
+      const x0 = s.x + NODE_W, x1 = t.x, xm = (x0 + x1) / 2;
+      svg += `<path class="link" d="M${x0},${y0} C${xm},${y0} ${xm},${y1} ${x1},${y1}" `
+           + `stroke="${s.color}" stroke-width="${Math.max(1, th)}">`
+           + `<title>${s.label} → ${t.label}: ${l.value}</title></path>`;
+    }
+  }
+  for (const n of present) {
+    svg += `<rect x="${n.x}" y="${n.y}" width="${NODE_W}" height="${n.h}" rx="2" fill="${n.color}">`
+         + `<title>${n.label}: ${n.value}</title></rect>`;
+    const left = n.col === lastCol;
+    svg += `<text x="${left ? n.x - 6 : n.x + NODE_W + 6}" y="${n.y + n.h / 2}" `
+         + `text-anchor="${left ? "end" : "start"}" dominant-baseline="middle">${n.label} (${n.value})</text>`;
+  }
+  svg += `</svg>`;
+  root.innerHTML = svg;
+}
+
+// --- timing (stage durations, hand-rolled SVG, computed client-side) ---
+/**
+ * Arithmetic mean.
+ * @param {number[]} xs
+ * @returns {number} the mean, or NaN for an empty list.
+ */
+const mean = xs => xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN;
+
+/**
+ * Median, averaging the middle pair at even length.
+ * @param {number[]} xs - not mutated; a copy is sorted.
+ * @returns {number} the median, or NaN for an empty list.
+ */
+const median = xs => {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b), m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/**
+ * Days from applied_date to a milestone, across the jobs that reached it.
+ *
+ * Milestone dates are freely user-editable (card inputs and the edit dialog), so a
+ * milestone before applied_date is reachable — those are dropped rather than drawn
+ * as a bar at -40 days.
+ *
+ * @param {object[]} jobs - every row from /api/jobs.
+ * @param {string} endField - the milestone column, e.g. "interview_date".
+ * @param {(j: object) => boolean} [extra] - a further filter on which jobs count.
+ * @returns {number[]} the spans in days, all finite and >= 0.
+ */
+const durations = (jobs, endField, extra = () => true) =>
+  jobs.filter(j => j[endField] && extra(j))
+      .map(j => elapsedDays(j.applied_date, j[endField]))
+      .filter(d => Number.isFinite(d) && d >= 0);
+
+/**
+ * Is this application still open — applied, and never moved anywhere?
+ * @param {object} j - a job row.
+ * @returns {boolean} true when its status is still "applied" and it carries no
+ *   milestone date at all.
+ */
+const isOpen = j => j.status === "applied"
+  && !j.interview_date && !j.offer_date && !j.rejected_date;
+
+/**
+ * How long each still-open application has been waiting.
+ *
+ * These ages keep growing, so they are lower bounds on a wait, not the length of a
+ * finished one — don't read them as outcomes.
+ *
+ * @param {object[]} jobs - every row from /api/jobs.
+ * @param {string} today - the reference date as YYYY-MM-DD.
+ * @returns {number[]} the ages in days, all finite and >= 0 (so a future-dated
+ *   application drops out).
+ */
+const openAges = (jobs, today) => jobs.filter(isOpen)
+  .map(j => elapsedDays(j.applied_date, today))
+  .filter(d => Number.isFinite(d) && d >= 0);
+
+/**
+ * Pick a histogram bin width.
+ * @param {number} max - the largest value to be binned.
+ * @returns {number} 7 days, doubling until there would be at most 20 bins.
+ */
+const binWidth = max => { let w = 7; while (max / w > 20) w *= 2; return w; };
+
+/**
+ * Bin a list of day-counts for the histogram.
+ * @param {number[]} values - must be non-empty.
+ * @returns {{w: number, counts: number[]}} the chosen bin width and the count in
+ *   each bin. A value sitting exactly on a bin edge lands in the upper bin.
+ */
+function histogramBins(values) {
+  const max = Math.max(...values);
+  const w = binWidth(max);
+  const counts = new Array(Math.floor(max / w) + 1).fill(0);
+  for (const v of values) counts[Math.floor(v / w)]++;
+  return { w, counts };
+}
+
+/**
+ * A round-looking axis tick interval.
+ * @param {number} max - the axis maximum.
+ * @param {number} [target] - roughly how many ticks are wanted.
+ * @returns {number} the smallest of 1/2/2.5/5/10 x a power of ten that is no finer
+ *   than max/target.
+ */
+const niceStep = (max, target = 6) => {
+  const raw = Math.max(1, max / target), p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw);
+};
+
+/**
+ * SVG path for one histogram bar: 4px rounded at the data end, square at the baseline.
+ * @param {number} x - left edge.
+ * @param {number} y - top of the bar.
+ * @param {number} w - bar width.
+ * @param {number} h - bar height.
+ * @returns {string} the `d` attribute.
+ */
+const barPath = (x, y, w, h) => {
+  const r = Math.min(4, w / 2, h);
+  return `M${x},${y + h} V${y + r} a${r},${r} 0 0 1 ${r},${-r} h${w - 2 * r} `
+       + `a${r},${r} 0 0 1 ${r},${r} V${y + h} Z`;
+};
+
+/**
+ * Escape text for interpolation into markup.
+ *
+ * Quotes included: scraped titles and locations get interpolated into attributes
+ * (option values, SVG <title>), where escaping only &<> leaves the attribute breakable.
+ *
+ * @param {*} s - anything; coerced to a string.
+ * @returns {string} with & < > " ' replaced by entities.
+ */
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/**
+ * "1 application" / "3 applications".
+ * @param {number} n - the count.
+ * @param {string} w - the singular noun.
+ * @returns {string} the count and the noun, pluralised with a bare "s".
+ */
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+/**
+ * A histogram of day-counts, as inline SVG.
+ * @param {number[]} values - the spans in days.
+ * @param {string} color - a CSS color for the bars, usually a stage token.
+ * @param {number} width - the measured container width in px.
+ * @returns {string} the SVG markup, or an empty-state paragraph when there is no
+ *   data. Ticks sit on bin *edges*, not bar centres: a bar spans a range, it isn't
+ *   a point.
+ */
+function histogramSVG(values, color, width) {
+  if (!values.length) return `<p class="tm-empty">No data yet.</p>`;
+  const { w, counts } = histogramBins(values);
+  const W = Math.max(300, width), PLOT = 170, PAD_L = 14, PAD_R = 14, AXIS = 34;
+  const H = PLOT + AXIS;                        // container includes the axis band
+  const inner = W - PAD_L - PAD_R;
+  const band = inner / counts.length;
+  const barW = Math.min(24, band - 2);          // 2px surface gap between adjacent bars
+  const maxCount = Math.max(...counts);
+
+  let svg = `<svg class="tm-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`;
+  counts.forEach((c, i) => {
+    if (!c) return;
+    const x = PAD_L + i * band + (band - barW) / 2;
+    const h = Math.max(2, (c / maxCount) * (PLOT - 22));
+    const y = PLOT - h;
+    svg += `<path d="${barPath(x, y, barW, h)}" fill="${color}">`
+         + `<title>${i * w}–${(i + 1) * w - 1} days: ${plural(c, "application")}</title></path>`
+         + `<text class="cap-val" x="${x + barW / 2}" y="${y - 6}" text-anchor="middle">${c}</text>`;
+  });
+  const step = Math.max(1, Math.ceil(counts.length / 8));
+  for (let i = 0; i <= counts.length; i += step)
+    svg += `<text class="tick" x="${PAD_L + i * band}" y="${PLOT + 15}" text-anchor="middle">${i * w}</text>`;
+  svg += `<line class="axis" x1="${PAD_L}" y1="${PLOT}" x2="${W - PAD_R}" y2="${PLOT}"/>`
+       + `<text x="${W / 2}" y="${H - 4}" text-anchor="middle">days since application</text></svg>`;
+  return svg;
+}
+
+/**
+ * One row per series: an observed range with mean and median markers, as inline SVG.
+ *
+ * Every row shares one x-axis — that comparability is the whole point of this chart,
+ * so never give the rows separate scales. The rule spans the observed min-max, not an
+ * interval estimate; swap in an IQR box or a bootstrap CI once n is big enough for
+ * either to mean anything.
+ *
+ * @param {{label: string, color: string, values: number[], open?: boolean}[]} series -
+ *   one entry per row. `open` caps the rule with an arrow instead of a rounded end,
+ *   for a series whose waits are still growing.
+ * @param {number} width - the measured container width in px.
+ * @returns {string} the SVG markup, or an empty-state paragraph when no series has
+ *   any values.
+ */
+function rangeChartSVG(series, width) {
+  const live = series.filter(s => s.values.length);
+  if (!live.length) return `<p class="tm-empty">No data yet.</p>`;
+  const maxAll = Math.max(...live.flatMap(s => s.values));
+  const W = Math.max(360, width), PAD_L = 10, PAD_R = 22, TOP = 8, ROW = 56, AXIS = 34;
+  const H = TOP + series.length * ROW + AXIS;
+  const x0 = PAD_L, x1 = W - PAD_R;
+  const sx = v => x0 + (maxAll ? (v / maxAll) : 0) * (x1 - x0);
+
+  let svg = `<svg class="tm-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`;
+  series.forEach((s, i) => {
+    const yLabel = TOP + i * ROW + 12, y = TOP + i * ROW + 36;
+    const n = s.values.length;
+    svg += `<circle cx="${x0 + 4}" cy="${yLabel - 4}" r="4" fill="${s.color}"/>`
+         + `<text class="row-name" x="${x0 + 15}" y="${yLabel}">${esc(s.label)}</text>`;
+    if (!n) {
+      svg += `<text x="${x0 + 15 + s.label.length * 7.2}" y="${yLabel}">  no data yet</text>`;
+      return;
+    }
+    const lo = Math.min(...s.values), hi = Math.max(...s.values);
+    const mu = mean(s.values), md = median(s.values);
+    svg += `<text x="${x1}" y="${yLabel}" text-anchor="end" class="tick">`
+         + `n=${n} · mean ${mu.toFixed(1)}d · median ${md}d</text>`;
+    // observed range
+    svg += `<line x1="${sx(lo)}" y1="${y}" x2="${sx(hi)}" y2="${y}" stroke="${s.color}" `
+         + `stroke-width="3" stroke-linecap="round" stroke-opacity=".3">`
+         + `<title>${esc(s.label)}: ${lo}–${hi} days (n=${n})</title></line>`;
+    // an open series has no upper bound yet — cap it with an arrow, not a rounded end
+    if (s.open)
+      svg += `<path d="M${sx(hi)},${y - 5} L${sx(hi) + 9},${y} L${sx(hi)},${y + 5} Z" fill="${s.color}" `
+           + `fill-opacity=".5"><title>still open — these waits are still growing</title></path>`;
+    // median: 2px tick, surface ring underneath so it stays legible where it meets the mean dot
+    svg += `<line x1="${sx(md)}" y1="${y - 10}" x2="${sx(md)}" y2="${y + 10}" stroke="var(--surface)" stroke-width="6"/>`
+         + `<line x1="${sx(md)}" y1="${y - 10}" x2="${sx(md)}" y2="${y + 10}" stroke="${s.color}" stroke-width="2">`
+         + `<title>median ${md} days</title></line>`;
+    // mean: >=8px marker with a 2px surface ring
+    svg += `<circle cx="${sx(mu)}" cy="${y}" r="5" fill="${s.color}" stroke="var(--surface)" stroke-width="2">`
+         + `<title>mean ${mu.toFixed(1)} days</title></circle>`;
+  });
+
+  const yA = TOP + series.length * ROW;
+  svg += `<line class="axis" x1="${x0}" y1="${yA}" x2="${x1}" y2="${yA}"/>`;
+  const st = niceStep(maxAll);
+  for (let v = 0; v <= maxAll; v += st)
+    svg += `<text class="tick" x="${sx(v)}" y="${yA + 15}" text-anchor="middle">${v}</text>`;
+  svg += `<text x="${W / 2}" y="${H - 4}" text-anchor="middle">days since application</text></svg>`;
+  return svg;
+}
+
+/**
+ * Draw the Timing tab: headline tiles, three histograms, the shared-scale range
+ * chart, and the top-10 longest-waiting applications.
+ * @param {object[]} jobs - every row from /api/jobs.
+ * @returns {void} replaces #timing's contents, then measures each plot container
+ *   and fills in its SVG — the charts need a laid-out width, so they cannot be
+ *   built in the same pass as the markup.
+ */
+function renderTiming(jobs) {
+  const root = document.getElementById("timing");
+  if (!jobs.length) { root.innerHTML = `<p class="tm-empty">No applications yet.</p>`; return; }
+
+  const today = todayISO();
+  const toInterview = durations(jobs, "interview_date");
+  const toReject = durations(jobs, "rejected_date", j => !j.interview_date);
+  const stillOpen = openAges(jobs, today);
+  const ghosted = stillOpen.filter(d => d >= GHOST_DAYS).length;
+  const ivRate = jobs.filter(j => j.interview_date).length / jobs.length;
+
+  // one headline tile: label, big number, and the caption under it
+  const tile = (lbl, val, sub) =>
+    `<div class="tm-tile"><div class="lbl">${lbl}</div><div class="val">${val}</div>`
+    + `<div class="sub">${sub}</div></div>`;
+  // a tile's median value, or an em dash when nothing has reached that milestone
+  const days = xs => xs.length ? `${median(xs)}d` : "—";
+
+  const wasters = jobs
+    .filter(isOpen)
+    .map(j => ({ ...j, days: elapsedDays(j.applied_date, today) }))
+    .filter(j => Number.isFinite(j.days) && j.days >= 0)
+    .sort((a, b) => b.days - a.days)
+    .slice(0, 10);
+
+  root.innerHTML = `
+    <div class="tm-tiles">
+      ${tile("Median time to interview", days(toInterview), `n=${toInterview.length}`)}
+      ${tile("Median time to rejection", days(toReject), `n=${toReject.length}, no interview`)}
+      ${tile("Interview rate", `${Math.round(ivRate * 100)}%`, `of ${plural(jobs.length, "application")}`)}
+      ${tile("Ghosted", ghosted, `applied, no reply in ${GHOST_DAYS}d`)}
+    </div>
+    <div class="tm-grid">
+      <div class="tm-card">
+        <h2>Time to interview</h2>
+        <p class="cap">Applications that reached an interview. n=${toInterview.length}.</p>
+        <div class="plot" id="tmHistIv"></div>
+      </div>
+      <div class="tm-card">
+        <h2>Time to rejection</h2>
+        <p class="cap">Rejections with no interview. Jobs rejected after interviewing are excluded. n=${toReject.length}.</p>
+        <div class="plot" id="tmHistRj"></div>
+      </div>
+      <div class="tm-card">
+        <h2>Still waiting</h2>
+        <p class="cap">Applied, no interview and no rejection. These are lower bounds — the wait is still running. n=${stillOpen.length}.</p>
+        <div class="plot" id="tmHistOp"></div>
+      </div>
+    </div>
+    <div class="tm-card">
+      <h2>Mean and median, same scale</h2>
+      <p class="cap">The rule spans the observed range; markers sit at the mean and median.
+        The arrow means that row is still open, so its rule keeps growing to the right.</p>
+      <div class="tm-key"><span>● mean</span><span>┃ median</span><span>▶ still open</span></div>
+      <div class="plot" id="tmRange"></div>
+    </div>
+    <div class="tm-card">
+      <h2>Top 10 time wasters</h2>
+      <p class="cap">Longest-running applications that have gone nowhere — no interview, no rejection, still waiting.</p>
+      ${wasters.length ? `<table class="mkt-table"><thead><tr>
+        <th>Company</th><th>Title</th><th>Applied</th><th>Days waiting</th>
+      </tr></thead><tbody>${wasters.map(j => `<tr>
+        <td>${esc(j.company)}</td><td>${esc(j.title)}</td>
+        <td>${j.applied_date}</td>
+        <td style="font-variant-numeric: tabular-nums">${j.days}</td>
+      </tr>`).join("")}</tbody></table>` : `<p class="tm-empty">Nothing is still waiting.</p>`}
+    </div>`;
+
+  // measure after layout, like renderFlow does
+  const ivEl = document.getElementById("tmHistIv"), rjEl = document.getElementById("tmHistRj");
+  const opEl = document.getElementById("tmHistOp");
+  ivEl.innerHTML = histogramSVG(toInterview, C_INTERVIEW, ivEl.clientWidth);
+  rjEl.innerHTML = histogramSVG(toReject, C_REJECT, rjEl.clientWidth);
+  opEl.innerHTML = histogramSVG(stillOpen, C_APPLIED, opEl.clientWidth);
+  const rgEl = document.getElementById("tmRange");
+  rgEl.innerHTML = rangeChartSVG([
+    { label: "Interview", color: C_INTERVIEW, values: toInterview },
+    { label: "Reject, no interview", color: C_REJECT, values: toReject },
+    { label: "Open, no response", color: C_APPLIED, values: stillOpen, open: true },
+  ], rgEl.clientWidth);
+}
+
+// Open /#selftest and read the console. A hash, not ?selftest: app.py routes on the
+// exact path, so a query string 404s before index.html is ever served.
+
+/**
+ * Assert two values are deeply equal, by JSON shape.
+ * @param {*} a - what the code produced.
+ * @param {*} b - what it should be.
+ * @param {string} msg - what is being checked, printed on failure.
+ * @returns {void} logs a console assertion; never throws, so one failure does not
+ *   stop the rest of a self-test.
+ */
+const eq = (a, b, msg) => console.assert(JSON.stringify(a) === JSON.stringify(b), msg, a, "!=", b);
+
+/**
+ * Self-test: the Timing tab's statistics and binning.
+ * @returns {void} console assertions over median, binWidth, histogramBins,
+ *   durations and openAges.
+ */
+function timingSelfTest() {
+  eq(median([3, 1, 2]), 2, "median, odd length");
+  eq(median([4, 1, 2, 3]), 2.5, "median, even length");
+  eq(binWidth(100), 7, "binWidth stays at 7 while <= 20 bins");
+  eq(binWidth(200), 14, "binWidth doubles past the 20-bin threshold");
+  eq(histogramBins([0, 7, 13]).counts, [1, 2], "a value on a bin edge counts once, in the upper bin");
+  eq(durations([
+    { applied_date: "2026-01-10", rejected_date: "2026-01-01" },   // negative span
+    { applied_date: "2026-01-01", rejected_date: null },           // no milestone
+    { applied_date: "2026-01-01", rejected_date: "2026-01-08" },   // 7 days
+  ], "rejected_date"), [7], "durations drops negative and missing spans");
+
+  const A = "2026-01-01";
+  eq(openAges([
+    { applied_date: A, status: "applied", interview_date: null, offer_date: null, rejected_date: null },
+    { applied_date: A, status: "applied", interview_date: "2026-01-05", offer_date: null, rejected_date: null },
+    { applied_date: A, status: "applied", interview_date: null, offer_date: null, rejected_date: "2026-01-05" },
+    { applied_date: A, status: "interviewing", interview_date: null, offer_date: null, rejected_date: null },
+    { applied_date: "2026-01-20", status: "applied", interview_date: null, offer_date: null, rejected_date: null },
+  ], "2026-01-11"), [10], "open = applied, no milestone, not moved, not future-dated");
+  console.log("timing self-test done");
+}
+// the #selftest dispatch lives at the bottom of this script, after every helper the
+// tests touch is initialized — `const` bindings are not hoisted the way functions are.
+
+// --- market research (own DB via /api/research/*) ---
+const LEVELS = ["intern", "entry", "mid", "senior"];
+
+/**
+ * A textarea's lines as a clean list.
+ * @param {string} s - newline-separated text.
+ * @returns {string[]} the lines, trimmed, with blanks dropped.
+ */
+const linesToList = s => s.split("\n").map(t => t.trim()).filter(Boolean);
+
+/**
+ * A comma-joined string as a clean list — the storage format for skills and cities.
+ * @param {string} s - comma-separated text, or null.
+ * @returns {string[]} the entries, trimmed, with blanks dropped.
+ */
+const commaToList = s => (s || "").split(",").map(t => t.trim()).filter(Boolean);
+
+// Sort state lives out here so Save/Scan/tab-switch re-renders keep the active column.
+// A module var, not localStorage: it survives a re-render and resets on reload.
+let mktSort = { key: null, dir: 1 };   // key: "title" | "company"; dir: 1 asc, -1 desc
+// Which level boxes are ticked *in the view*, which is not the saved profile: ticking one
+// filters the table now, without a save or a rescan. null = untouched, follow the profile.
+// Survives renderMarket() the way mktSort does, so a Scan doesn't silently re-show what
+// you just unchecked. [] is a real value (all unchecked = show any level), hence `??`.
+let mktLevels = null;
+
+/**
+ * A posting's seniority as a sortable rank.
+ *
+ * Level is ordinal, not alphabetical: sorted as text, "entry" would land before
+ * "intern". LEVELS already holds the right order, so rank by index.
+ *
+ * @param {object} m - a match row.
+ * @returns {number} its index in LEVELS; LEVELS.length for an unknown or blank
+ *   level, so those sort last.
+ */
+const levelRank = m => { const i = LEVELS.indexOf(m.skill_level); return i < 0 ? LEVELS.length : i; };
+
+/**
+ * A comparator for the market table's [tr, match] pairs.
+ *
+ * localeCompare does case- and accent-insensitive ordering natively — no lowercasing,
+ * no collator library. The .trim() is there because the feed's location field keeps
+ * its surrounding whitespace (research.py trims only title/company), and a leading
+ * space sorts ahead of every letter, so the order would contradict the text the user
+ * actually sees in the cell.
+ *
+ * @param {string} key - the match field to sort on; "skill_level" ranks by LEVELS.
+ * @param {number} dir - 1 ascending, -1 descending.
+ * @returns {(a: [Element, object], b: [Element, object]) => number} a comparator.
+ *   Array.sort is stable, so ties keep the DB's newest-first order.
+ */
+const byField = (key, dir) => key === "skill_level"
+  ? (a, b) => dir * (levelRank(a[1]) - levelRank(b[1]))
+  : (a, b) => dir * (a[1][key] || "").trim().localeCompare((b[1][key] || "").trim(), undefined, { sensitivity: "base" });
+
+/**
+ * Build a title-matching predicate from a filter-box query.
+ *
+ * A view-only filter over rows already in the DB — nothing is deleted, and no rescan
+ * happens. Bare terms all have to match (AND-narrow); `-term` excludes. Note the
+ * profile's own `titles` field ORs its terms; this ANDs, because a filter box is
+ * expected to narrow.
+ *
+ * @param {string} query - e.g. "senior -staff".
+ * @returns {(title: string) => boolean} true to keep the row. An empty query keeps
+ *   everything; a bare "-" is not an exclude.
+ */
+function titleFilter(query) {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const inc = terms.filter(t => t[0] !== "-");
+  const exc = terms.filter(t => t[0] === "-").map(t => t.slice(1)).filter(Boolean);
+  return title => {
+    const t = (title || "").toLowerCase();
+    return inc.every(w => t.includes(w)) && !exc.some(w => t.includes(w));
+  };
+}
+
+/**
+ * Build a location-matching predicate from a filter-box query.
+ *
+ * Locations are not titles: the placeholder promises "remote, san francisco", so
+ * commas OR (a location is one place — ANDing them matches nothing). `-term` still
+ * excludes, and wins over any include.
+ *
+ * @param {string} query - e.g. "remote, san francisco" or "-remote".
+ * @returns {(text: string) => boolean} true to keep the row. Feed it locText(), not
+ *   the raw location: matching the canonical cities as well is what lets "san
+ *   francisco" find a row reading "SF Office". An empty query keeps everything.
+ */
+function locationFilter(query) {
+  const clauses = (query || "").toLowerCase().split(",").map(s => s.trim()).filter(Boolean);
+  const inc = clauses.filter(c => c[0] !== "-");
+  const exc = clauses.filter(c => c[0] === "-").map(c => c.slice(1)).filter(Boolean);
+  return text => {
+    const t = (text || "").toLowerCase();
+    if (exc.some(w => t.includes(w))) return false;
+    return !inc.length || inc.some(w => t.includes(w));
+  };
+}
+/**
+ * Everything a location filter should match against for one row.
+ * @param {object} r - a match row, with `location` (raw feed text) and `cities`
+ *   (locations.py's canonical answer, comma-joined; absent until it has run).
+ * @returns {string} both, comma-joined, with the missing side left out.
+ */
+const locText = r => [r.location, r.cities].filter(Boolean).join(", ");
+
+/**
+ * Is this url safe to put in an href?
+ *
+ * The row urls are scraped from a third-party feed, so only http(s) is linkified: a
+ * `javascript:` url in an href runs in this page's origin (localhost:8000) when
+ * clicked. enrich.py refuses to fetch anything but http(s), so this is the
+ * render-side half of the same allowlist.
+ *
+ * @param {string} url - the scraped url.
+ * @returns {boolean} true only for an absolute http(s) url. Parsed against a base
+ *   so a relative or garbage url can't slip through, and re-tested against the raw
+ *   string so a relative path doesn't inherit the page's own scheme.
+ */
+function safeHref(url) {
+  try { return ["http:", "https:"].includes(new URL(url, location.origin).protocol) && /^https?:/i.test(url); }
+  catch { return false; }
+}
+
+/**
+ * Self-test: safeHref accepts real posting links and refuses executable schemes.
+ * @returns {void} console assertions.
+ */
+function safeHrefSelfTest() {
+  eq(safeHref("https://jobs.ashbyhq.com/x/y"), true,  "https is linkified");
+  eq(safeHref("http://block.xyz/careers/1"),   true,  "http is linkified");
+  eq(safeHref("javascript:alert(1)"),          false, "javascript: is refused");
+  eq(safeHref("JavaScript:alert(1)"),          false, "scheme match is case-insensitive");
+  eq(safeHref("data:text/html,<script>1<\/script>"), false, "data: is refused");
+  eq(safeHref("/careers/123"),                 false, "a relative url is not a real posting link");
+  eq(safeHref(""),                             false, "empty is refused");
+  console.log("safeHref self-test done");
+}
+
+/**
+ * Build a seniority predicate from the checked level boxes.
+ *
+ * Same rule as the profile's own `levels`: nothing checked means "any level", not "no
+ * levels", and every box checked means the same thing. A row whose level the source
+ * left blank shows only under that no-restriction case — Speedrun states no seniority
+ * for most roles, and dropping them while the boxes say "all four" would leave the tab
+ * showing fewer rows than the match count beside it.
+ *
+ * @param {string[]} checked - the ticked level values.
+ * @returns {(level: string|null) => boolean} true to keep the row.
+ */
+function levelFilter(checked) {
+  const want = new Set(checked);
+  return level => !want.size || want.size === LEVELS.length || want.has(level);
+}
+
+/**
+ * Self-test: levelFilter's "none checked" and "all checked" both mean no restriction.
+ * @returns {void} console assertions, including the blank-level cases.
+ */
+function levelFilterSelfTest() {
+  const keep = (checked, level) => levelFilter(checked)(level);
+  eq(keep(["mid", "senior"], "senior"), true,  "checked level shows");
+  eq(keep(["mid", "senior"], "intern"), false, "unchecked level hides");
+  eq(keep([], "intern"),                true,  "nothing checked means any level, not none");
+  eq(keep(LEVELS, "intern"),            true,  "all four checked shows every known level");
+  eq(keep(["mid"], null),               false, "a blank level is not 'mid'");
+  eq(keep([], null),                    true,  "a blank level survives the any-level case");
+  eq(keep(LEVELS, null),                true,  "all four checked is no restriction, so blanks show too");
+  eq(keep(["mid", "senior"], null),     false, "narrowing to some levels still drops blanks");
+  console.log("level filter self-test done");
+}
+
+/**
+ * Self-test: titleFilter ANDs its include terms and lets an exclude win.
+ * @returns {void} console assertions.
+ */
+function titleFilterSelfTest() {
+  const keep = (q, title) => titleFilter(q)(title);
+  eq(keep("senior -staff", "Senior Software Engineer"), true,  "include hits, no excluded word");
+  eq(keep("senior -staff", "Staff Engineer"),           false, "exclude wins over nothing to include");
+  eq(keep("senior -staff", "Senior Staff Engineer"),    false, "exclude wins even when include hits");
+  eq(keep("senior -staff", "Mid-level Engineer"),       false, "missing include term");
+  eq(keep("senior backend", "Senior Backend Engineer"), true,  "includes AND together");
+  eq(keep("senior backend", "Senior Frontend Engineer"),false, "AND: one include missing");
+  eq(keep("", "anything at all"),                       true,  "empty query keeps everything");
+  eq(keep("-", "Staff Engineer"),                       true,  "bare dash is not an exclude");
+  console.log("title filter self-test done");
+}
+
+/**
+ * Self-test: locationFilter ORs its clauses and matches canonical cities too.
+ * @returns {void} console assertions, including the fan-out case where a two-city
+ *   posting only charts the city the filter asked for.
+ */
+function locationFilterSelfTest() {
+  const keep = (q, r) => locationFilter(q)(locText(r));
+  const row = (location, cities) => ({ location, cities });
+  eq(keep("san francisco", row("SF Office", "San Francisco")), true,  "matches the canonical city, not just raw text");
+  eq(keep("san francisco", row("San Francisco, CA", "")),       true,  "matches raw text when unmapped");
+  eq(keep("remote, san francisco", row("Remote - US", "Remote")), true, "commas OR");
+  eq(keep("remote, san francisco", row("Austin, TX", "Austin")), false, "OR: neither clause hits");
+  eq(keep("-remote", row("San Francisco, CA or Remote", "San Francisco,Remote")), false, "exclude wins");
+  eq(keep("", row("anywhere", "")),                             true,  "empty query keeps everything");
+  // the fan-out fix: a two-city posting only charts the city the filter asked for
+  const pass = locationFilter("san francisco");
+  eq(locationBucket("SF | NYC", "San Francisco,New York").filter(pass), ["San Francisco"], "filtered fan-out");
+  console.log("location filter self-test done");
+}
+
+/**
+ * Self-test: byField's ordering — case, accents, whitespace, nulls, stability, and
+ * the ordinal level rank.
+ * @returns {void} console assertions. byField sorts the [tr, match] pairs
+ *   renderMarket builds; only the match half matters here.
+ */
+function mktSortSelfTest() {
+  const pairs = (...ms) => ms.map(m => [null, m]);
+  const titles = rs => rs.map(r => r[1].title);
+
+  const mixed = pairs({ title: "beta" }, { title: "Alpha" }, { title: "gamma" });
+  eq(titles(mixed.slice().sort(byField("title", 1))), ["Alpha", "beta", "gamma"], "title asc ignores case");
+  eq(titles(mixed.slice().sort(byField("title", -1))), ["gamma", "beta", "Alpha"], "title desc reverses");
+
+  const co = pairs({ company: "Zoox" }, { company: "acme" });
+  eq(co.slice().sort(byField("company", 1)).map(r => r[1].company), ["acme", "Zoox"], "company asc ignores case");
+
+  eq(titles(pairs({ title: null }, { title: "a" }).sort(byField("title", 1))), [null, "a"], "null title sorts as empty, no throw");
+
+  const tied = pairs({ title: "same", company: "first" }, { title: "same", company: "second" });
+  eq(tied.slice().sort(byField("title", 1)).map(r => r[1].company), ["first", "second"], "equal titles keep original order (stable)");
+
+  const loc = pairs({ location: "San Francisco" }, { location: "austin" });
+  eq(loc.slice().sort(byField("location", 1)).map(r => r[1].location), ["austin", "San Francisco"], "location asc ignores case");
+  // the feed ships locations like " NC - Charlotte " — untrimmed, a leading space would sort them first
+  const pad = pairs({ location: " zeta " }, { location: "alpha" });
+  eq(pad.slice().sort(byField("location", 1)).map(r => r[1].location.trim()), ["alpha", "zeta"], "surrounding whitespace does not drag a row to the top");
+
+  // Level must rank by LEVELS, not by text — this is the whole reason levelRank exists.
+  eq(["senior", "intern", "entry"].slice().sort(), ["entry", "intern", "senior"], "sanity: plain text sort really does put entry before intern");
+  const lv = pairs({ skill_level: "senior" }, { skill_level: "intern" }, { skill_level: "mid" }, { skill_level: "entry" });
+  const lvs = rs => rs.map(r => r[1].skill_level);
+  eq(lvs(lv.slice().sort(byField("skill_level", 1))), ["intern", "entry", "mid", "senior"], "level asc follows LEVELS order");
+  eq(lvs(lv.slice().sort(byField("skill_level", -1))), ["senior", "mid", "entry", "intern"], "level desc reverses LEVELS order");
+  eq(lvs(pairs({ skill_level: "senior" }, { skill_level: null }, { skill_level: "intern" }).sort(byField("skill_level", 1))),
+     ["intern", "senior", null], "an unknown level sorts last, not first");
+  console.log("market sort self-test done");
+}
+
+// --- salary / market research (aggregates the scraped feed, all client-side) ---
+let salRows = null;      // fetched postings with a parsed `_sal`, re-fetched each renderSalary
+let salLevels = null;    // checked seniority — survives an apply() the way mktLevels does
+let salJobs = [];        // job buckets picked in the skills comparison dropdown — survives an apply()
+
+const HOURS_PER_YEAR = 2080;
+
+/**
+ * Format a salary for an axis tick or a table cell.
+ * @param {number} v - dollars per year.
+ * @returns {string} e.g. "$225k", or an em dash for a non-finite value.
+ */
+const dollarK = v => Number.isFinite(v) ? "$" + Math.round(v / 1000) + "k" : "—";
+
+/**
+ * Parse a posting's free-text pay into an annual band.
+ *
+ * Salary arrives exactly as the posting wrote it: "$225,000 - $320,000", "$170K -
+ * $320K", "180k - 300k", en and em dashes, "to" as the separator, USD as a prefix or
+ * a suffix. Every number is pulled out, a K suffix multiplies it, and the min and max
+ * become the band. A bare figure under $2000 can't be an annual salary, so it is read
+ * as an hourly rate and annualised — crude, but postings carry no explicit /hr flag.
+ *
+ * @param {string} raw - the salary text, or null.
+ * @returns {{lo: number, hi: number}|null} the annual band, or null when there are no
+ *   numbers or the result lands outside any real salary range (a parse artifact).
+ */
+function parseSalary(raw) {
+  if (!raw) return null;
+  const nums = [...String(raw).matchAll(/(\d[\d,]*\.?\d*)\s*([kK])?/g)]
+    .map(m => { let n = parseFloat(m[1].replace(/,/g, "")); if (m[2]) n *= 1000; return n; })
+    .filter(n => Number.isFinite(n) && n > 0)
+    .map(n => n < 2000 ? n * HOURS_PER_YEAR : n);
+  if (!nums.length) return null;
+  const lo = Math.min(...nums), hi = Math.max(...nums);
+  if (hi < 10000 || lo > 2000000) return null;
+  return { lo, hi };
+}
+
+// Title has 452 distinct values and location 174, almost all unique — collapse to buckets so a
+// breakdown group has real n. First match wins, so order most-specific first. Edit freely.
+const TITLE_BUCKETS = [
+  [/machine learning|\bml\b|deep learning|\bai\b|nlp|computer vision/i, "ML Engineer"],
+  [/data scien/i, "Data Scientist"],
+  [/research scien|research engineer|applied scien/i, "Research Scientist"],
+  [/data engineer|analytics engineer|\betl\b|platform engineer/i, "Data Engineer"],
+  [/data analyst|business analyst|\banalyst\b/i, "Data Analyst"],
+  [/software engineer|\bswe\b|backend|front.?end|full.?stack|developer/i, "Software Engineer"],
+  [/manager|director|\blead\b|head of|\bvp\b|principal/i, "Manager / Lead"],
+  [/product/i, "Product"],
+];
+/**
+ * Which job-title bucket a posting belongs to.
+ *
+ * Grouped by the search profile's own title terms (the ones listed on the Job search
+ * tab) so the breakdown mirrors that tab: a posting falls into the first search term
+ * its title contains — the same case-insensitive substring rule the profile itself
+ * uses. Falls back to the built-in TITLE_BUCKETS keywords only when no search titles
+ * are set, so the tab still works out of the box.
+ *
+ * @param {string} title - the posting's title.
+ * @param {string[]} terms - the profile's title terms; empty to use the fallback.
+ * @returns {string} the bucket label, or "Other" when nothing matches.
+ */
+function titleBucket(title, terms) {
+  const t = (title || "").toLowerCase();
+  if (terms && terms.length) return terms.find(term => t.includes(term.toLowerCase())) || "Other";
+  for (const [re, label] of TITLE_BUCKETS) if (re.test(title || "")) return label;
+  return "Other";
+}
+// Feed locations fragment badly ("SF Office", "Hybrid (NYC Metro)", "Strava SF"), so locations.py
+// canonicalises each distinct string with the local model and research.list_matches joins the
+// answer in as `cities` — comma-joined, and more than one when a posting names several.
+// The METROS list below is only the fallback for rows the model has not seen (Ollama never run,
+// or off). It stays deliberately dumb: knowing that Bengaluru is Bangalore is the model's job,
+// and a hand-maintained alias table is exactly what this replaced.
+const METROS = ["San Francisco", "New York", "Seattle", "Los Angeles", "Boston", "Austin",
+  "Chicago", "Denver", "Atlanta", "Washington", "Mountain View", "Palo Alto", "San Jose",
+  "Toronto", "London"];
+/**
+ * Which city or cities a posting counts toward.
+ *
+ * A named city beats the working arrangement: "San Francisco, CA, US; Remote, US" is
+ * an SF salary, and testing /remote/i first (as this used to) swallowed every hybrid
+ * posting into Remote.
+ *
+ * @param {string} loc - the raw feed location.
+ * @param {string} [cities] - locations.py's canonical answer, comma-joined.
+ * @returns {string[]|string} an array of cities when the model has mapped that raw
+ *   string — the caller fans the posting out into each. Otherwise a single label
+ *   from the METROS fallback, the leading comma segment, or "Other".
+ */
+function locationBucket(loc, cities) {
+  const mapped = (cities || "").split(",").map(s => s.trim()).filter(Boolean);
+  if (mapped.length) return mapped;
+  const l = (loc || "").trim();
+  if (!l) return "Other";
+  const metro = METROS.find(m => l.toLowerCase().includes(m.toLowerCase()));
+  if (metro) return metro;
+  if (/remote/i.test(l)) return "Remote";
+  return l.split(",")[0].trim() || "Other";
+}
+
+/**
+ * Sample standard deviation.
+ * @param {number[]} xs
+ * @returns {number} the SD, or 0 for n<2 — a single posting has no spread to draw a
+ *   whisker from.
+ */
+const stdev = xs => {
+  if (xs.length < 2) return 0;
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1));
+};
+
+/**
+ * Aggregate salaried postings into groups.
+ *
+ * keyFn may return several keys — a posting open in SF and NYC belongs in both, so its
+ * band counts in each. That makes the n column sum to more than the posting count,
+ * which is the right trade for a "what does this city pay" table. String-returning
+ * keyFns are unaffected.
+ *
+ * @param {object[]} rows - postings, each with a parsed `_sal`; rows without one are
+ *   skipped.
+ * @param {(r: object) => string|string[]} keyFn - the grouping key(s) for a row.
+ * @returns {{label: string, n: number, loMean: number, loMed: number, loSD: number,
+ *   hiMean: number, hiMed: number, hiSD: number}[]} one entry per group, with the low
+ *   and high ends of the band aggregated separately. A row whose keyFn yields nothing
+ *   lands in "Other".
+ */
+function salaryGroups(rows, keyFn) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (!r._sal) continue;
+    const keys = [keyFn(r)].flat().filter(Boolean);
+    for (const key of (keys.length ? keys : ["Other"])) {
+      if (!groups.has(key)) groups.set(key, { los: [], his: [] });
+      const g = groups.get(key);
+      g.los.push(r._sal.lo);
+      g.his.push(r._sal.hi);
+    }
+  }
+  return [...groups].map(([label, g]) => ({
+    label, n: g.los.length,
+    loMean: mean(g.los), loMed: median(g.los), loSD: stdev(g.los),
+    hiMean: mean(g.his), hiMed: median(g.his), hiSD: stdev(g.his),
+  }));
+}
+/**
+ * Put seniority groups in ladder order and capitalise their labels.
+ * @param {object[]} groups - salaryGroups' output, keyed by skill_level.
+ * @returns {object[]} the groups in LEVELS order, dropping any level absent from
+ *   this slice.
+ */
+const orderByLevel = groups => LEVELS
+  .map(lvl => groups.find(g => g.label === lvl))
+  .filter(Boolean)
+  .map(g => ({ ...g, label: g.label[0].toUpperCase() + g.label.slice(1) }));
+
+/**
+ * The n biggest groups, so a breakdown shows the ones with real sample sizes.
+ * @param {object[]} groups - salaryGroups' output.
+ * @param {number} n - how many to keep.
+ * @returns {object[]} a new array, sorted by n descending and truncated.
+ */
+const topGroups = (groups, n) => groups.slice().sort((a, b) => b.n - a.n).slice(0, n);
+
+/**
+ * The salary breakdown table for one grouping.
+ * @param {object[]} groups - salaryGroups' output.
+ * @returns {string} the table markup, or an empty-state paragraph.
+ */
+function salTable(groups) {
+  if (!groups.length) return `<p class="tm-empty">No salary data in this slice.</p>`;
+  const body = groups.map(g =>
+    `<tr><td>${esc(g.label)}</td><td class="num">${g.n}</td>`
+    + `<td class="num">${dollarK(g.loMean)}</td><td class="num">${dollarK(g.loMed)}</td>`
+    + `<td class="num">${dollarK(g.hiMean)}</td><td class="num">${dollarK(g.hiMed)}</td></tr>`).join("");
+  return `<table class="mkt-table"><thead><tr><th>Group</th><th class="num">n</th>`
+    + `<th class="num">Low mean</th><th class="num">Low median</th>`
+    + `<th class="num">High mean</th><th class="num">High median</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+/**
+ * The salary breakdown as a chart: one row per group, two error bars each.
+ *
+ * Each bar is a dot at the mean, a tick at the median, and whiskers at mean ± 1 SD
+ * (clamped at 0). Low and high ends sit on separate tracks so they never tangle, and
+ * every row shares one dollar x-axis. Adapted from rangeChartSVG.
+ *
+ * @param {object[]} groups - salaryGroups' output.
+ * @param {number} width - the measured container width in px.
+ * @returns {string} the SVG markup, or "" for no groups.
+ */
+function salaryRangeSVG(groups, width) {
+  if (!groups.length) return "";
+  const maxAxis = Math.max(...groups.flatMap(g => [g.loMean + g.loSD, g.loMed, g.hiMean + g.hiSD, g.hiMed]));
+  const W = Math.max(360, width), PAD_L = 200, PAD_R = 24, TOP = 8, ROW = 56, AXIS = 28, DY = 9;
+  const H = TOP + groups.length * ROW + AXIS;
+  const x0 = PAD_L, x1 = W - PAD_R;
+  const sx = v => x0 + (maxAxis ? v / maxAxis : 0) * (x1 - x0);
+  const ACCENT = "var(--pair-a)";
+  /**
+   * One error bar on its own horizontal track.
+   * @param {number} y - the track's baseline.
+   * @param {number} meanV - where the dot goes.
+   * @param {number} medV - where the tick goes.
+   * @param {number} sd - half the whisker span.
+   * @param {string} label - already escaped; used in the hover title.
+   * @returns {string} the whisker, its caps, the median tick and the mean dot.
+   */
+  const errBar = (y, meanV, medV, sd, label) => {
+    const lo = Math.max(0, meanV - sd), hi = meanV + sd;
+    return `<line x1="${sx(lo)}" y1="${y}" x2="${sx(hi)}" y2="${y}" stroke="${ACCENT}" stroke-width="2" stroke-opacity=".4"/>`
+      + [lo, hi].map(v => `<line x1="${sx(v)}" y1="${y - 4}" x2="${sx(v)}" y2="${y + 4}" stroke="${ACCENT}" stroke-width="2" stroke-opacity=".4"/>`).join("")
+      + `<line x1="${sx(medV)}" y1="${y - 6}" x2="${sx(medV)}" y2="${y + 6}" stroke="var(--surface)" stroke-width="4"/>`
+      + `<line x1="${sx(medV)}" y1="${y - 6}" x2="${sx(medV)}" y2="${y + 6}" stroke="${ACCENT}" stroke-width="2"/>`
+      + `<circle cx="${sx(meanV)}" cy="${y}" r="4.5" fill="${ACCENT}" stroke="var(--surface)" stroke-width="2">`
+      + `<title>${label}: mean ${dollarK(meanV)} ± ${dollarK(sd)} · median ${dollarK(medV)}</title></circle>`;
+  };
+  // Group labels are profile-driven ("Forward Deployed Engineer"), so they need real room:
+  // end-anchored text runs off the left edge of the viewBox rather than wrapping. n= goes on
+  // its own line so the label gets the full gutter, and clip() is the backstop past that.
+  // The cap counts characters but the gutter is pixels, so it holds for job titles (widest
+  // measured 163px against a 190px gutter) and not for pathological input — 26 capital Ws
+  // need 297px and would still overflow. Swap in textLength if a real title ever clips.
+  const clip = s => s.length > 26 ? s.slice(0, 25) + "…" : s;
+  let svg = `<svg class="tm-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`;
+  groups.forEach((g, i) => {
+    const yc = TOP + i * ROW + ROW / 2;
+    svg += `<text x="${x0 - 10}" y="${yc - 8}" text-anchor="end" dominant-baseline="middle" class="row-name">`
+         + `${esc(clip(g.label))}<title>${esc(g.label)}</title></text>`
+         + `<text x="${x0 - 10}" y="${yc + 10}" text-anchor="end" dominant-baseline="middle" class="tick">n=${g.n}</text>`
+         + errBar(yc - DY, g.loMean, g.loMed, g.loSD, esc(g.label) + " low")
+         + errBar(yc + DY, g.hiMean, g.hiMed, g.hiSD, esc(g.label) + " high");
+  });
+  const yA = TOP + groups.length * ROW;
+  svg += `<line class="axis" x1="${x0}" y1="${yA}" x2="${x1}" y2="${yA}"/>`;
+  const st = niceStep(maxAxis);
+  for (let v = 0; v <= maxAxis; v += st)
+    svg += `<text class="tick" x="${sx(v)}" y="${yA + 15}" text-anchor="middle">${dollarK(v)}</text>`;
+  return svg + `</svg>`;
+}
+
+/**
+ * Tally how many postings list each skill.
+ * @param {object[]} rows - postings; `skills` is one comma-joined string each, and a
+ *   row without it is skipped.
+ * @returns {{label: string, n: number}[]} one entry per distinct skill, counted
+ *   case-insensitively but keeping a first-seen spelling for display, most common
+ *   first.
+ */
+function skillCounts(rows) {
+  const counts = new Map();
+  for (const r of rows) {
+    if (!r.skills) continue;
+    for (const raw of r.skills.split(",")) {
+      const s = raw.trim();
+      if (!s) continue;
+      const e = counts.get(s.toLowerCase()) || { label: s, n: 0 };
+      e.n++;
+      counts.set(s.toLowerCase(), e);
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.n - a.n);
+}
+/**
+ * The in-demand skills as a word cloud.
+ *
+ * A sequential encoding: size AND ink both track frequency — rarer is smaller and
+ * muted, common is bigger and darker. Frequency still drives both, but the words are
+ * laid out in a stable, size-interspersed order (hashed by label) so big and small
+ * ones mix into a cloud instead of stacking big-first into a rectangle.
+ *
+ * @param {{label: string, n: number}[]} skills - skillCounts' output.
+ * @param {number} [topN] - how many of the most common to show.
+ * @returns {string} the cloud markup, or an empty-state paragraph.
+ */
+function skillCloud(skills, topN = 40) {
+  const top = skills.slice(0, topN);
+  if (!top.length) return `<p class="tm-empty">No skills in this slice.</p>`;
+  const maxN = top[0].n, minN = top[top.length - 1].n, span = Math.max(1, maxN - minN);
+  const size = n => (13 + 30 * Math.sqrt((n - minN) / span)).toFixed(0);
+  const ink = n => { const t = (n - minN) / span; return t > .66 ? "var(--ink)" : t > .33 ? "var(--pair-a)" : "var(--ink-2)"; };
+  const hash = s => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
+  const arranged = top.slice().sort((a, b) => hash(a.label) - hash(b.label));
+  return `<div class="skill-cloud">` + arranged.map(s =>
+    `<span style="font-size:${size(s.n)}px;color:${ink(s.n)}" title="${esc(s.label)}: ${s.n}">${esc(s.label)}</span>`
+  ).join("") + `</div>`;
+}
+/**
+ * The most-asked-for skills as a horizontal bar chart.
+ * @param {{label: string, n: number}[]} skills - skillCounts' output.
+ * @param {number} width - the measured container width in px.
+ * @param {number} [topN] - how many bars to draw.
+ * @returns {string} the SVG markup, or "" when there are no skills.
+ */
+function skillBarsSVG(skills, width, topN = 20) {
+  const top = skills.slice(0, topN);
+  if (!top.length) return "";
+  const W = Math.max(360, width), PAD_L = 170, PAD_R = 40, ROW = 22, TOP = 6;
+  const H = TOP + top.length * ROW + 4;
+  const maxN = top[0].n, x1 = W - PAD_R;
+  const sx = n => (maxN ? n / maxN : 0) * (x1 - PAD_L);
+  const clip = s => s.length > 24 ? s.slice(0, 23) + "…" : s;
+  let svg = `<svg class="tm-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`;
+  top.forEach((s, i) => {
+    const y = TOP + i * ROW, w = Math.max(2, sx(s.n));
+    svg += `<text x="${PAD_L - 8}" y="${y + ROW / 2}" text-anchor="end" dominant-baseline="middle" class="row-name">${esc(clip(s.label))}</text>`
+         + `<rect x="${PAD_L}" y="${y + 3}" width="${w}" height="${ROW - 8}" rx="3" fill="var(--pair-a)"><title>${esc(s.label)}: ${s.n}</title></rect>`
+         + `<text x="${PAD_L + w + 5}" y="${y + ROW / 2}" dominant-baseline="middle" class="cap-val">${s.n}</text>`;
+  });
+  return svg + `</svg>`;
+}
+
+/**
+ * Group postings by job-title bucket — feeds the comparison and skill-gap dropdowns.
+ * @param {object[]} rows - postings, usually pre-filtered to the skill-bearing ones.
+ * @param {string[]} terms - the profile's title terms, passed through to titleBucket.
+ * @returns {{label: string, rows: object[]}[]} one entry per bucket, biggest first.
+ */
+function jobBuckets(rows, terms) {
+  const m = new Map();
+  for (const r of rows) {
+    const k = titleBucket(r.title, terms);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  }
+  return [...m].map(([label, rs]) => ({ label, rows: rs })).sort((a, b) => b.rows.length - a.rows.length);
+}
+
+/**
+ * How many of a slice's postings list each skill.
+ * @param {object[]} rows - the postings in one slice.
+ * @returns {{n: number, counts: Map<string, {label: string, c: number}>}} the slice
+ *   size and a lowercased-key map of counts, so the caller can turn either into a
+ *   rate.
+ */
+function skillRates(rows) {
+  const counts = new Map();
+  for (const r of rows) for (const raw of (r.skills || "").split(",")) {
+    const s = raw.trim(); if (!s) continue;
+    const e = counts.get(s.toLowerCase()) || { label: s, c: 0 };
+    e.c++; counts.set(s.toLowerCase(), e);
+  }
+  return { n: rows.length, counts };
+}
+/**
+ * Compare two job buckets by what their postings ask for.
+ *
+ * Rates, not raw counts, so buckets with different posting counts compare fairly.
+ *
+ * @param {object[]} rowsA - the first bucket's postings.
+ * @param {object[]} rowsB - the second bucket's postings.
+ * @param {number} [topN] - how many skills to keep.
+ * @returns {{nA: number, nB: number, diffs: {label: string, rA: number, rB: number,
+ *   diff: number}[]}} the two slice sizes, and each skill's rate on both sides sorted
+ *   by the size of the gap. A skill seen only once across both is rate-noise and is
+ *   dropped.
+ */
+function skillCompare(rowsA, rowsB, topN = 18) {
+  const A = skillRates(rowsA), B = skillRates(rowsB);
+  const diffs = [];
+  for (const k of new Set([...A.counts.keys(), ...B.counts.keys()])) {
+    const a = A.counts.get(k), b = B.counts.get(k);
+    if ((a ? a.c : 0) + (b ? b.c : 0) < 2) continue;
+    const rA = A.n ? (a ? a.c : 0) / A.n : 0, rB = B.n ? (b ? b.c : 0) / B.n : 0;
+    diffs.push({ label: (a || b).label, rA, rB, diff: rA - rB });
+  }
+  diffs.sort((x, y) => Math.abs(y.diff) - Math.abs(x.diff));
+  return { nA: A.n, nB: B.n, diffs: diffs.slice(0, topN) };
+}
+/**
+ * The two-job skill comparison as diverging bars.
+ *
+ * A leans right, B leans left, and bar length is the gap in share of postings, in
+ * percentage points.
+ *
+ * @param {object} cmp - skillCompare's output.
+ * @param {string} labelA - the right-hand job's name.
+ * @param {string} labelB - the left-hand job's name.
+ * @param {number} width - the measured container width in px.
+ * @returns {string} the SVG markup, or an empty-state paragraph when the two jobs
+ *   share no skills worth comparing.
+ */
+function skillCompareSVG(cmp, labelA, labelB, width) {
+  const { diffs, nA, nB } = cmp;
+  if (!diffs.length) return `<p class="tm-empty">No shared skills to compare between these jobs.</p>`;
+  const A_COLOR = "var(--pair-a)", B_COLOR = "var(--pair-b)";   // CVD-safe diverging pair
+  const W = Math.max(360, width), PAD_L = 160, PAD_R = 16, TOP = 34, ROW = 22, BOT = 8;
+  const H = TOP + diffs.length * ROW + BOT;
+  const cx = PAD_L + (W - PAD_L - PAD_R) / 2, half = (W - PAD_L - PAD_R) / 2 - 46;
+  const maxDiff = Math.max(...diffs.map(d => Math.abs(d.diff))) || 1;
+  const sx = d => (d / maxDiff) * half;
+  const pp = d => (d >= 0 ? "+" : "−") + Math.round(Math.abs(d) * 100);
+  const pct = r => Math.round(r * 100) + "%";
+  const clip = s => s.length > 22 ? s.slice(0, 21) + "…" : s;
+  let svg = `<svg class="tm-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`;
+  svg += `<text x="${cx - 6}" y="16" text-anchor="end" class="row-name" fill="${B_COLOR}">◀ ${esc(labelB)} (n=${nB})</text>`
+       + `<text x="${cx + 6}" y="16" class="row-name" fill="${A_COLOR}">${esc(labelA)} (n=${nA}) ▶</text>`
+       + `<line class="axis" x1="${cx}" y1="${TOP - 6}" x2="${cx}" y2="${H - BOT}"/>`;
+  diffs.forEach((d, i) => {
+    const y = TOP + i * ROW + ROW / 2;
+    const dx = sx(d.diff), x = dx >= 0 ? cx : cx + dx, w = Math.max(1, Math.abs(dx));
+    const color = d.diff >= 0 ? A_COLOR : B_COLOR;
+    const lx = d.diff >= 0 ? cx + w + 5 : cx - w - 5, anchor = d.diff >= 0 ? "start" : "end";
+    svg += `<text x="${PAD_L - 8}" y="${y}" text-anchor="end" dominant-baseline="middle" class="row-name">${esc(clip(d.label))}</text>`
+         + `<rect x="${x}" y="${y - 6}" width="${w}" height="12" rx="2" fill="${color}">`
+         + `<title>${esc(d.label)}: ${pct(d.rA)} in ${esc(labelA)} vs ${pct(d.rB)} in ${esc(labelB)}</title></rect>`
+         + `<text x="${lx}" y="${y}" text-anchor="${anchor}" dominant-baseline="middle" class="cap-val">${pp(d.diff)}pp</text>`;
+  });
+  return svg + `</svg>`;
+}
+
+/**
+ * Draw the Salary tab's three breakdowns plus the skills panel, for one filtered slice.
+ * @param {HTMLElement} container - #salResults; its contents are replaced.
+ * @param {object[]} shown - every posting passing the filters.
+ * @param {object[]} withSal - the subset that has a parsed salary.
+ * @param {string[]} terms - the profile's title terms, for the by-title buckets.
+ * @param {(text: string) => boolean} passL - the active location predicate. A posting
+ *   open in SF and NYC lands in both buckets, so filtering to SF would otherwise still
+ *   draw a New York row; only the buckets the filter asked for are kept. If none
+ *   match, the row got in on its raw location text, so its buckets are left alone
+ *   rather than dropping it off the chart.
+ * @returns {void} also wires the two job dropdowns, which re-render the skills panel
+ *   in place: one job focuses the cloud, two compare their skill rates.
+ */
+function renderSalResults(container, shown, withSal, terms, passL) {
+  const W = Math.max(360, (container.clientWidth || 820) - 40);
+  const bySen = orderByLevel(salaryGroups(withSal, r => r.skill_level));
+  const byTitle = topGroups(salaryGroups(withSal, r => titleBucket(r.title, terms)), 12);
+  const byLoc = topGroups(salaryGroups(withSal, r => {
+    const b = locationBucket(r.location, r.cities);
+    if (!Array.isArray(b)) return b;
+    const kept = b.filter(passL);
+    return kept.length ? kept : b;
+  }), 12);
+
+  /**
+   * One breakdown card: heading, table, and the chart when there is data.
+   * @param {string} heading - the card's title.
+   * @param {object[]} groups - salaryGroups' output.
+   * @returns {string} the card markup.
+   */
+  const section = (heading, groups) =>
+    `<div class="sal-card"><h2>${heading}</h2>${salTable(groups)}`
+    + (groups.length ? salaryRangeSVG(groups, W)
+        + `<div class="tm-key">Upper track: low end &nbsp;·&nbsp; lower track: high end &nbsp;—&nbsp; Dot: mean &nbsp;·&nbsp; Tick: median &nbsp;·&nbsp; Whisker: ±1 SD</div>` : "")
+    + `</div>`;
+
+  container.innerHTML =
+      section("Salary by seniority", bySen)
+    + section("Salary by job title", byTitle)
+    + section("Salary by location", byLoc)
+    + `<div class="sal-card"><h2>In-demand skills</h2>`
+    + `<div class="sal-skillbar"><label>Job<select id="salJobA"></select></label>`
+    + `<label>Compare with<select id="salJobB"></select></label>`
+    + `<span class="mkt-info">Pick a job to focus the cloud; choose a second to compare skill rates.</span></div>`
+    + `<div id="salSkills"></div></div>`;
+
+  // Two real dropdowns. Both live outside the innerHTML string so they keep their listeners; options
+  // are the job buckets present in this slice. Only skill-bearing postings feed the skills panel.
+  const skillRows = shown.filter(r => r.skills);
+  const jobs = jobBuckets(skillRows, terms);
+  const byLabel = new Map(jobs.map(j => [j.label, j.rows]));
+  const selA = container.querySelector("#salJobA");
+  const selB = container.querySelector("#salJobB");
+  /**
+   * Fill one job dropdown with the buckets present in this slice.
+   * @param {HTMLSelectElement} sel - the dropdown.
+   * @param {string} placeholder - the label for the empty first option.
+   * @returns {void}
+   */
+  const fillOpts = (sel, placeholder) => {
+    sel.innerHTML = "";
+    const p = document.createElement("option");
+    p.value = ""; p.textContent = placeholder;
+    sel.appendChild(p);
+    for (const j of jobs) {
+      const o = document.createElement("option");
+      o.value = j.label;
+      o.textContent = `${j.label} (${j.rows.length})`;
+      sel.appendChild(o);
+    }
+  };
+  fillOpts(selA, "All jobs");
+  fillOpts(selB, "— none —");
+  selA.value = salJobs[0] || "";     // a stale value not in the new options resets to the placeholder
+  selB.value = salJobs[1] || "";
+  const skillsDiv = container.querySelector("#salSkills");
+  /**
+   * Redraw the skills panel for whatever the two dropdowns currently name.
+   * @returns {void} two distinct jobs draw the diverging comparison; one or none
+   *   draws the cloud and bars over that slice. Also records the picks so they
+   *   survive the next apply().
+   */
+  const renderSkills = () => {
+    salJobs = [selA.value, selB.value];
+    const picked = [...new Set([selA.value, selB.value].filter(Boolean))];
+    if (picked.length === 2) {
+      skillsDiv.innerHTML = skillCompareSVG(skillCompare(byLabel.get(picked[0]) || [], byLabel.get(picked[1]) || []), picked[0], picked[1], W)
+        + `<div class="tm-key">Difference in share of postings listing each skill (percentage points), biggest gaps first.</div>`;
+    } else {
+      const rows = picked.length ? skillRows.filter(r => picked.includes(titleBucket(r.title, terms))) : skillRows;
+      const skills = skillCounts(rows);
+      skillsDiv.innerHTML = skillCloud(skills) + skillBarsSVG(skills, W);
+    }
+  };
+  selA.onchange = renderSkills;
+  selB.onchange = renderSkills;
+  renderSkills();
+}
+
+/**
+ * Draw the Salary tab: fetch every alive posting, then filter and aggregate locally.
+ * @returns {Promise<void>} replaces #salary with the filter bar and the results, and
+ *   wires the title/location boxes and seniority checkboxes to re-filter in place.
+ *   Nothing here refetches — the filters run over the rows already in hand.
+ */
+async function renderSalary() {
+  const root = document.getElementById("salary");
+  const [profile, rows] = await Promise.all([
+    api("GET", "/api/research/profile"),
+    api("GET", "/api/research/matches/all"),
+  ]);
+  for (const r of rows) r._sal = parseSalary(r.salary);
+  salRows = rows;
+  const terms = profile.titles || [];   // the Job search tab's own job-title list drives the by-title buckets
+
+  root.innerHTML = `
+    <div class="sal-filter">
+      <label>Filter titles<input id="salTitle" type="search" placeholder="engineer -staff" autocomplete="off"></label>
+      <label>Filter location<input id="salLoc" type="search" placeholder="remote, san francisco" autocomplete="off"></label>
+      <fieldset id="salLevels"><legend>Seniority (none = all)</legend></fieldset>
+      <span class="sal-info" id="salInfo"></span>
+    </div>
+    <div id="salResults"></div>`;
+
+  const levelsBox = root.querySelector("#salLevels");
+  for (const lvl of LEVELS) {
+    const lab = document.createElement("label");
+    lab.innerHTML = `<input type="checkbox" value="${lvl}"><span></span>`;
+    lab.querySelector("span").textContent = lvl;
+    lab.querySelector("input").checked = (salLevels || []).includes(lvl);
+    levelsBox.appendChild(lab);
+  }
+  // the seniority boxes ticked right now, read straight off the DOM
+  const checkedLevels = () => [...levelsBox.querySelectorAll("input:checked")].map(c => c.value);
+
+  const titleBox = root.querySelector("#salTitle");
+  const locBox = root.querySelector("#salLoc");
+  const results = root.querySelector("#salResults");
+  const info = root.querySelector("#salInfo");
+
+  /**
+   * Re-filter the postings and redraw everything below the filter bar.
+   * @returns {void}
+   */
+  const apply = () => {
+    const passT = titleFilter(titleBox.value), passL = locationFilter(locBox.value);
+    const passLv = levelFilter(checkedLevels());
+    const shown = salRows.filter(r => passT(r.title || "") && passL(locText(r)) && passLv(r.skill_level));
+    const withSal = shown.filter(r => r._sal);
+    info.textContent = `${shown.length} posting${shown.length === 1 ? "" : "s"} · ${withSal.length} with salary`;
+    renderSalResults(results, shown, withSal, terms, passL);
+  };
+
+  titleBox.oninput = apply;
+  locBox.oninput = apply;
+  levelsBox.onchange = () => { salLevels = checkedLevels(); apply(); };
+  apply();
+}
+
+// --- resume analysis (own endpoints via /api/resume/*) ---
+//
+// The server scores every alive posting once and ships each row's six feature values
+// with it. Everything below re-ranks from those numbers in the browser, so the importance
+// chips and the two hard-filter toggles never hit the network.
+
+let resData = null;      // the whole /api/resume/matches payload, re-fetched on tab activation
+let resImp = null;    // feature -> 0..3 chip position; the only weight state there is
+let resFilters = { years: false, levels: false };
+let resGapJob = "";      // job bucket picked in the skill-gap dropdown
+let resPrevRank = null;  // id -> rank at the previous draw, for the ▲/▼ movement markers
+let resFlush = null;     // pending debounced re-render after a skill edit; module-scoped so
+                         // a render can cancel it — a timer armed by one render otherwise
+                         // fires against the next one's DOM. Cosmetic only: cancelling it
+                         // never loses a write, which is why the write is not on this timer.
+let resSkillWrite = Promise.resolve();   // serializes the skill PATCHes, across re-renders
+let resSkillErr = "";    // a save error with no card to show it on; the next render prints it
+
+// No Title chip: research.matches() already drops postings whose title misses your
+// target titles, so a title feature could only ever be 1.0. The server stopped
+// scoring it; a stale `title` in localStorage is dropped by resLoadImp's key check.
+const RES_LABELS = {
+  semantic: "Semantic", skills: "Skills", years: "Years",
+  level: "Level", recency: "Recency",
+};
+const RES_TOP = 50;      // render the top N only: 666 rows re-rendered on every change
+                         // is visibly janky. Raise it if you want a longer list.
+
+// Four discrete steps instead of a 0-100 range. resScore divides by the weight total, so
+// only ratios survive — 4/4/4/4/4 ranks exactly like 1/1/1/1/1. The old sliders let
+// you set five numbers that looked absolute and weren't. Off is a real 0: the feature
+// drops out of both sides of the average rather than being weighted lightly.
+const RES_STEPS = ["Off", "Low", "Normal", "High"];
+const RES_STEP_W = [0, 1, 2, 4];
+// ≈ the server's WEIGHTS (.32/.27/.17/.12/.12) at chip resolution.
+const RES_IMP_DEFAULT = { skills: 3, semantic: 3, years: 2, level: 1, recency: 1 };
+const RES_IMP_KEY = "jt.resume.importance";
+
+/**
+ * Read the saved importance chips back out of localStorage.
+ *
+ * localStorage is user-editable and survives across versions, so anything read back is
+ * validated against the current feature list before it can reach resScore as a NaN.
+ *
+ * @param {string|null} raw - the stored JSON, or null when nothing is saved.
+ * @returns {Object<string, number>} a full chip map: RES_IMP_DEFAULT with any valid
+ *   saved value laid over it. Corrupt JSON, non-objects, unknown keys and
+ *   out-of-range or non-integer values all fall back to the default.
+ */
+function resLoadImp(raw) {
+  const out = { ...RES_IMP_DEFAULT };
+  let saved;
+  try { saved = JSON.parse(raw); } catch { return out; }
+  if (!saved || typeof saved !== "object") return out;
+  for (const k of Object.keys(RES_LABELS)) {
+    if (Number.isInteger(saved[k]) && saved[k] >= 0 && saved[k] < RES_STEPS.length) out[k] = saved[k];
+  }
+  return out;
+}
+
+/**
+ * Turn the chip positions into the weights resScore uses.
+ * @param {Object<string, number>} levels - feature -> chip index (0..3).
+ * @returns {Object<string, number>} feature -> weight from RES_STEP_W, so Off is a
+ *   real 0 and the feature drops out of both sides of the average.
+ */
+const resWeightsOf = levels => Object.fromEntries(
+  Object.keys(RES_LABELS).map(k => [k, RES_STEP_W[levels[k]]]));
+
+/**
+ * Score one posting from its features and the current chip weights.
+ *
+ * Mirrors resume.combine() in Python, including the imputation: a missing feature is
+ * filled with that feature's corpus mean (`fills`, computed server-side and shipped
+ * with the payload). Not 0 (penalizes a posting for a gap in what we scraped), not 1
+ * (rewards it), and not "drop the term and renormalize" — that reads as fair but is
+ * not, because the features are not equally generous, and it floated the postings we
+ * know least about straight to the top.
+ *
+ * @param {Object<string, number|null>} features - the row's six feature values.
+ * @param {Object<string, number>} weights - feature -> weight.
+ * @param {Object<string, number>} [fills] - feature -> corpus mean.
+ * @returns {number} the 0-1 score, or 0 when nothing weighted had a value. Iterates
+ *   the weights, not the features, so an Off chip truly drops out.
+ */
+function resScore(features, weights, fills) {
+  let sum = 0, total = 0;
+  for (const [k, w] of Object.entries(weights)) {
+    let v = features[k];
+    if (v === null || v === undefined) v = fills ? fills[k] : undefined;
+    if (v === null || v === undefined) continue;
+    sum += w * v;
+    total += w;
+  }
+  return total ? sum / total : 0;
+}
+
+/**
+ * Which of the skills this slice of the market asks for do you already have?
+ *
+ * Reuses skillRates() for the market side, so the denominator is "share of postings
+ * listing this skill" exactly as on the Salary tab. Coverage is weighted by
+ * prevalence: matching a skill 90% of postings want counts for more than matching a
+ * niche one, which is the question "am I employable here?"
+ *
+ * @param {object[]} rows - the postings in this slice.
+ * @param {Set<string>} resumeSet - your skills, lowercased.
+ * @param {number} [topN] - how many of the most-demanded skills to weigh.
+ * @returns {{n: number, skills: {label: string, rate: number, have: boolean}[],
+ *   coverage: number}} the slice size, each skill with its demand and whether you
+ *   have it, and the prevalence-weighted share you cover (0 for an empty slice).
+ */
+function resumeGap(rows, resumeSet, topN = 22) {
+  const { n, counts } = skillRates(rows);
+  const skills = [...counts.entries()]
+    .map(([key, e]) => ({ label: e.label, rate: n ? e.c / n : 0, have: resumeSet.has(key) }))
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, topN);
+  const wanted = skills.reduce((t, s) => t + s.rate, 0);
+  const met = skills.reduce((t, s) => t + (s.have ? s.rate : 0), 0);
+  return { n, skills, coverage: wanted ? met / wanted : 0 };
+}
+
+/**
+ * The skill gap as a bar chart.
+ *
+ * Same bar idiom as skillBarsSVG, but length encodes market demand and colour encodes
+ * whether you have the skill — kept separate rather than threading two callbacks
+ * through the shared function for two different meanings.
+ *
+ * @param {object} gap - resumeGap's output.
+ * @param {number} width - the measured container width in px.
+ * @returns {string} the SVG markup, or an empty-state paragraph when no skills have
+ *   been extracted for this slice yet.
+ */
+function resumeGapSVG(gap, width) {
+  const { skills } = gap;
+  if (!skills.length) return `<p class="tm-empty">No skills extracted for this job title yet.</p>`;
+  const HAVE = "var(--pair-a)", LACK = "var(--pair-b)";     // same CVD-safe pair as skillCompareSVG
+  const W = Math.max(360, width), PAD_L = 170, PAD_R = 52, ROW = 22, TOP = 6;
+  const H = TOP + skills.length * ROW + 4;
+  const maxRate = skills[0].rate || 1, x1 = W - PAD_R;
+  const sx = r => (r / maxRate) * (x1 - PAD_L);
+  const clip = s => s.length > 24 ? s.slice(0, 23) + "…" : s;
+  let svg = `<svg class="tm-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img">`;
+  skills.forEach((s, i) => {
+    const y = TOP + i * ROW, w = Math.max(2, sx(s.rate));
+    const fill = s.have ? HAVE : LACK;
+    svg += `<text x="${PAD_L - 8}" y="${y + ROW / 2}" text-anchor="end" dominant-baseline="middle" class="row-name">${esc(clip(s.label))}</text>`
+         + `<rect x="${PAD_L}" y="${y + 3}" width="${w}" height="${ROW - 8}" rx="3" fill="${fill}">`
+         + `<title>${esc(s.label)}: ${Math.round(s.rate * 100)}% of postings ask for it — ${s.have ? "on your resume" : "NOT on your resume"}</title></rect>`
+         + `<text x="${PAD_L + w + 5}" y="${y + ROW / 2}" dominant-baseline="middle" class="cap-val">${Math.round(s.rate * 100)}%</text>`;
+  });
+  return svg + `</svg>`;
+}
+
+/**
+ * One posting's "why" column: its six features as scannable text.
+ * @param {object} row - a scored result row, carrying its `features`.
+ * @param {object} prof - the saved profile, for the years comparison.
+ * @returns {string} the markup. An abstained feature renders as "—" so a gap in the
+ *   scraped data is visible rather than silently folded into the score.
+ */
+function resFeatCells(row, prof) {
+  const f = row.features;
+  const pct = v => Math.round(v * 100) + "%";
+  // one feature's cell: its value, or a muted dash when the feature abstained
+  const bit = (k, text) => f[k] === null || f[k] === undefined
+    ? `<span class="off">${RES_LABELS[k]} —</span>`
+    : `<span>${RES_LABELS[k]} <b>${text}</b></span>`;
+  const yrs = row.years_experience
+    ? `${row.years_experience}y vs your ${prof.years_experience || 0}y`
+    : "";
+  return `<div class="feat">`
+    + bit("skills", pct(f.skills))
+    + bit("semantic", (f.semantic ?? 0).toFixed(2))
+    + bit("years", yrs)
+    + bit("level", esc(row.skill_level || ""))
+    + bit("title", f.title === 1 ? "match" : "other")
+    + bit("recency", `${row.found_at || ""}`)
+    + `</div>`;
+}
+
+/**
+ * Draw the whole Resume Analysis tab.
+ *
+ * Four panels: the resume itself (upload, text, skill chips), the shared profile, the
+ * skill gap by job title, and the ranked postings. Everything below the fetch re-ranks
+ * client-side, so the importance chips and the two hard-filter toggles never hit the
+ * network.
+ *
+ * @returns {Promise<void>} replaces #resume's contents and wires every control. If
+ *   the server has nothing to rank (no resume, no embedding), the two analysis panels
+ *   show that error and the function returns early — the resume and profile panels
+ *   still work, since they are how you fix it.
+ */
+async function renderResume() {
+  const root = document.getElementById("resume");
+  clearTimeout(resFlush);     // see resFlush: this render owns the DOM the timer targeted
+  root.innerHTML = `<p class="tm-empty">Loading …</p>`;
+  // Every render path goes through here, so this is the one place that guarantees the GET
+  // below never overtakes a skill PATCH and redraws the list the user just edited away.
+  // The chain always fulfils (its catch handles the failure), so this can't hang.
+  await resSkillWrite;
+  const [prof, data] = await Promise.all([
+    api("GET", "/api/research/profile"),
+    api("GET", "/api/resume/matches").catch(e => ({ error: e.message })),
+  ]);
+  const saved = await api("GET", "/api/resume").catch(() => ({}));
+  resData = data;
+  resImp = resImp || resLoadImp(localStorage.getItem(RES_IMP_KEY));
+  resPrevRank = null;   // deltas mean "since your last change", not "since your last visit"
+
+  root.innerHTML = `
+    <div class="sal-card">
+      <h2>Your resume</h2>
+      <div class="res-row">
+        <input type="file" id="resFile" accept=".pdf,.txt,.md">
+        <button id="resSave" class="job">Save &amp; analyse</button>
+        <span class="res-note" id="resStatus"></span>
+      </div>
+      <textarea class="res-text" id="resTextBox" spellcheck="false"
+        placeholder="Upload a PDF above, or paste your resume text here."></textarea>
+      <p class="res-note">PDF text extraction is imperfect on multi-column layouts — fix anything
+        mangled above before saving, since the skill extraction and section matching both read it.</p>
+      <div class="chips" id="resSkills" data-job-lock></div>
+      <form class="res-row" id="resSkillForm" style="margin:8px 0 0" data-job-lock>
+        <input id="resSkillIn" maxlength="50" placeholder="Add a skill" style="min-width:200px">
+        <button>Add</button>
+      </form>
+    </div>
+
+    <div class="sal-card">
+      <h2>Confirm your profile</h2>
+      <div class="res-row">
+        <label>Years of experience<input type="number" id="resYears" min="0" max="60"></label>
+        <label>Target job titles (one per line)
+          <textarea id="resTitles" rows="4" style="min-width:260px;padding:8px;border:1px solid var(--rule-strong);border-radius:4px;font:inherit"></textarea>
+        </label>
+        <fieldset id="resLevels" style="border:1px solid var(--rule-strong);border-radius:4px;padding:6px 12px;display:flex;gap:12px;align-self:flex-end">
+          <legend style="font-size:12px;color:var(--ink-2);padding:0 4px">Seniority</legend>
+        </fieldset>
+        <button id="resProfSave" style="align-self:flex-end">Save profile</button>
+        <span class="res-note" id="resProfStatus"></span>
+      </div>
+      <p class="res-note">These are the same titles and levels the Job search and Salary tabs use —
+        editing here changes them there too.</p>
+    </div>
+
+    <div class="sal-card" id="resGapCard">
+      <h2>Skill gap by job title</h2>
+      <div class="sal-skillbar">
+        <label>Job title<select id="resGapSel"></select></label>
+        <span class="res-note" id="resGapInfo"></span>
+      </div>
+      <div id="resGapOut"></div>
+    </div>
+
+    <div class="sal-card" id="resMatchCard">
+      <h2>Best matching postings</h2>
+      <p class="res-note" id="resWeightNote">How much should each thing count? Only the balance
+        between them matters — everything on High ranks the same as everything on Normal.
+        <a href="#" id="resWreset">Reset</a></p>
+      <div class="res-weights" id="resWeightBox"></div>
+      <div class="res-toggles">
+        <label><input type="checkbox" id="resFiltYears">Hide roles needing more years than I have</label>
+        <label><input type="checkbox" id="resFiltLevels">Hide levels outside my profile</label>
+        <span class="res-note" id="resMatchInfo" style="margin-left:auto"></span>
+      </div>
+      <div id="resMatchOut"></div>
+    </div>`;
+
+  // --- resume panel
+  const textBox = root.querySelector("#resTextBox");
+  const status = root.querySelector("#resStatus");
+  const skillsBox = root.querySelector("#resSkills");
+  textBox.value = saved.text || "";
+  let skills = commaToList(saved.skills);
+  /**
+   * Redraw the skill chips from the local `skills` list.
+   * @returns {void} built with the DOM, not innerHTML: esc() leaves quotes alone, and
+   *   a skill goes into the remove button's aria-label.
+   */
+  const showSkills = () => {
+    skillsBox.textContent = "";
+    const label = document.createElement("span");
+    label.className = "chips-label";
+    label.textContent = skills.length ? `${skills.length} skills found:`
+                                      : "No skills yet.";
+    skillsBox.append(label, ...skills.map((s, i) => {
+      const chip = document.createElement("span");
+      chip.textContent = s;
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "chip-x";
+      x.dataset.i = i;
+      x.textContent = "×";
+      x.setAttribute("aria-label", `Remove ${s}`);
+      chip.appendChild(x);
+      return chip;
+    }));
+  };
+  showSkills();
+  if (saved.updated_at) status.textContent = `Saved ${saved.updated_at}`;
+  if (resSkillErr) {
+    // A save that failed while this render was already in flight had no #resStatus to
+    // write to — it left the message here so the failure can't pass silently.
+    status.className = "res-note err";
+    status.textContent = resSkillErr;
+    resSkillErr = "";
+  }
+
+  /**
+   * Store an edited skill list and schedule the re-render it invalidates.
+   *
+   * Skills are stored as one comma-joined string and only feed coverage(), so an edit
+   * is a cheap column write — no re-extraction, no re-embedding.
+   *
+   * The write goes out on the click and is never debounced: a tab switch or a window
+   * resize re-renders, and a pending write would be cancelled with it — a deletion
+   * that silently didn't happen. Only the re-render is debounced, since it blanks the
+   * card (you can't click the next × mid-redraw) and re-scores every posting.
+   * Requests carry the whole list, so they run through one promise chain rather than
+   * in parallel.
+   *
+   * @param {string[]} next - the full list to store.
+   * @returns {void} updates the chips immediately, PATCHes, and arms a 600ms
+   *   re-render. A failed save parks its message where the next render will print it.
+   */
+  const saveSkills = next => {
+    skills = next;
+    showSkills();
+    status.className = "res-note";
+    status.textContent = "";
+    let mine;                   // the re-render this call arms, below
+    resSkillWrite = resSkillWrite
+      .then(() => api("PATCH", "/api/resume/skills", { skills: next }))
+      .catch(err => {
+        // Cancel only our own re-render — a later click that succeeded is entitled to
+        // its repaint. A render may have replaced these nodes, so find the live status.
+        if (resFlush === mine) clearTimeout(resFlush);
+        // Worded to hold either way: the chips may still show the edit, or a render may
+        // have already put the stored list back.
+        resSkillErr = `Could not save skills: ${err.message} — that change was not stored.`;
+        const st = document.getElementById("resStatus");
+        // No node while a render is mid-flight, and no point writing to a hidden tab —
+        // either way it stays parked for the next render to print.
+        if (st && st.offsetParent) {
+          st.className = "res-note err";
+          st.textContent = resSkillErr;
+          resSkillErr = "";
+        }
+      });
+    clearTimeout(resFlush);
+    mine = resFlush = setTimeout(async () => {
+      await renderResume();     // gap chart and every score read the new list
+      root.querySelector("#resSkillIn").focus();
+    }, 600);
+  };
+  skillsBox.onclick = ev => {
+    const btn = ev.target.closest(".chip-x");
+    if (btn) saveSkills(skills.filter((_, i) => i !== Number(btn.dataset.i)));
+  };
+  root.querySelector("#resSkillForm").onsubmit = ev => {
+    ev.preventDefault();     // a <form> gets Enter-to-submit for free
+    const box = root.querySelector("#resSkillIn");
+    if (!box.value.trim()) return;
+    const have = new Set(skills.map(s => s.toLowerCase()));
+    // Split on commas: that is the storage delimiter, so one typed "React, Redux" has to
+    // become two chips or it would silently split itself on the next load. The Set grows
+    // as it goes, so "Go, go" adds one chip rather than two the server then collapses.
+    const add = [];
+    for (const s of commaToList(box.value)) {
+      if (have.has(s.toLowerCase())) continue;
+      have.add(s.toLowerCase());
+      add.push(s);
+    }
+    if (add.length) { box.value = ""; saveSkills([...skills, ...add]); }
+    else { status.className = "res-note"; status.textContent = "Already in the list."; }
+  };
+
+  root.querySelector("#resFile").onchange = async ev => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    status.className = "res-note";
+    status.textContent = `Reading ${file.name} …`;
+    try {
+      const res = await fetch("/api/resume/extract", {
+        method: "POST",
+        headers: { "X-Filename": file.name, "Content-Type": "application/octet-stream" },
+        body: file,
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || res.statusText);
+      textBox.value = d.text;
+      status.textContent = `Read ${file.name} — check the text below, then Save & analyse.`;
+    } catch (err) {
+      status.className = "res-note err";
+      status.textContent = err.message;
+    }
+  };
+
+  const saveBtn = root.querySelector("#resSave");
+  saveBtn.onclick = () => {
+    if (!textBox.value.trim()) { status.className = "res-note err"; status.textContent = "Nothing to save."; return; }
+    // This PUT re-extracts the skill list and overwrites the column, so the skill UI
+    // (data-job-lock) goes inert for the run — see paintBusy.
+    clearTimeout(resFlush);   // a pending skill re-render would race this PUT
+    status.className = "res-note";
+    status.textContent = "Extracting skills and embedding — this takes a while, watch the terminal …";
+    return runJob(saveBtn, "Analysing…", async () => {
+      try {
+        const d = await runRemote("PUT", "/api/resume", {
+          text: textBox.value,
+          filename: root.querySelector("#resFile").files[0]?.name || null,
+        });
+        if (!d.ok) throw new Error("saved, but embedding failed — is sentence-transformers installed? See the terminal.");
+        await renderResume();     // re-fetch: skills, years and every score just changed
+      } catch (err) {
+        const st = document.getElementById("resStatus");   // a re-render may have replaced it
+        if (st) { st.className = "res-note err"; st.textContent = err.message; }
+      }
+    });
+  };
+
+  // --- confirm panel (shares the profile the other tabs read)
+  const yearsBox = root.querySelector("#resYears");
+  const titlesBox = root.querySelector("#resTitles");
+  const levelsBox = root.querySelector("#resLevels");
+  yearsBox.value = prof.years_experience || 0;
+  titlesBox.value = (prof.titles || []).join("\n");
+  for (const lvl of LEVELS) {
+    const lab = document.createElement("label");
+    lab.style.cssText = "flex-direction:row;align-items:center;gap:6px;text-transform:capitalize;font-size:12px";
+    lab.innerHTML = `<input type="checkbox" value="${lvl}"><span></span>`;
+    lab.querySelector("span").textContent = lvl;
+    lab.querySelector("input").checked = (prof.levels || []).includes(lvl);
+    levelsBox.appendChild(lab);
+  }
+  root.querySelector("#resProfSave").onclick = async ev => {
+    const st = root.querySelector("#resProfStatus");
+    ev.target.disabled = true;
+    try {
+      // set_profile merges, so sending these three leaves the rest of the profile alone
+      await api("PATCH", "/api/research/profile", {
+        years_experience: Number(yearsBox.value) || 0,
+        titles: linesToList(titlesBox.value),
+        levels: [...levelsBox.querySelectorAll("input:checked")].map(c => c.value),
+      });
+      renderResume();     // years and levels feed two of the five features; titles only
+                          // gate what gets scraped, which is why there is no title one
+    } catch (err) {
+      st.className = "res-note err";
+      st.textContent = err.message;
+      ev.target.disabled = false;
+    }
+  };
+
+  paintBusy();   // a run started before this render (tab switch) still owns these controls
+
+  // --- the two analysis panels need a saved, embedded resume
+  if (data.error) {
+    root.querySelector("#resGapOut").innerHTML = `<p class="tm-empty">${esc(data.error)}</p>`;
+    root.querySelector("#resMatchOut").innerHTML = `<p class="tm-empty">${esc(data.error)}</p>`;
+    root.querySelector("#resWeightBox").innerHTML = "";
+    root.querySelector("#resWeightNote").remove();
+    if (data.pending) {
+      root.querySelector("#resMatchInfo").textContent = `${data.pending} posting(s) not embedded yet`;
+    }
+    return;
+  }
+
+  const resumeSet = new Set(commaToList(data.resume_skills).map(s => s.toLowerCase()));
+  const terms = prof.titles || [];
+
+  // --- skill gap
+  const gapSel = root.querySelector("#resGapSel");
+  const gapOut = root.querySelector("#resGapOut");
+  const gapInfo = root.querySelector("#resGapInfo");
+  const buckets = jobBuckets(data.results.filter(r => r.skills), terms);
+  gapSel.innerHTML = `<option value="">All postings</option>`
+    + buckets.map(b => `<option value="${esc(b.label)}">${esc(b.label)} (${b.rows.length})</option>`).join("");
+  if (buckets.some(b => b.label === resGapJob)) gapSel.value = resGapJob;
+  /**
+   * Redraw the skill-gap chart for the job title the dropdown names.
+   * @returns {void} an empty pick means every skill-bearing posting. Also records the
+   *   pick so it survives the next render.
+   */
+  const drawGap = () => {
+    resGapJob = gapSel.value;
+    const rows = resGapJob
+      ? (buckets.find(b => b.label === resGapJob) || { rows: [] }).rows
+      : data.results.filter(r => r.skills);
+    const gap = resumeGap(rows, resumeSet);
+    const W = Math.max(360, (gapOut.clientWidth || 820) - 40);
+    gapInfo.textContent = `${gap.n} posting(s) · you have ${Math.round(gap.coverage * 100)}% of what they ask for, weighted by how often each skill comes up`;
+    gapOut.innerHTML = resumeGapSVG(gap, W)
+      + `<div class="tm-key"><span style="color:var(--pair-a)">■ on your resume</span>`
+      + `<span style="color:var(--pair-b)">■ missing</span>`
+      + `<span>Bar length: share of these postings that ask for the skill.</span></div>`;
+  };
+  gapSel.onchange = drawGap;
+  drawGap();
+
+  // --- matches
+  const wBox = root.querySelector("#resWeightBox");
+  const matchOut = root.querySelector("#resMatchOut");
+  const matchInfo = root.querySelector("#resMatchInfo");
+  const filtYears = root.querySelector("#resFiltYears");
+  const filtLevels = root.querySelector("#resFiltLevels");
+  filtYears.checked = resFilters.years;
+  filtLevels.checked = resFilters.levels;
+
+  /**
+   * Draw the six importance controls from the current chip positions.
+   * @returns {void} a radio group per feature: arrow keys move between steps and Tab
+   *   skips to the next feature, both for free, which is why these are radios and not
+   *   styled buttons.
+   */
+  const drawWeights = () => {
+    wBox.innerHTML = Object.keys(RES_LABELS).map(k =>
+      `<div class="wrow"><span class="wname">${RES_LABELS[k]}</span><span class="seg" role="radiogroup"
+         aria-label="${RES_LABELS[k]} importance">`
+      + RES_STEPS.map((s, i) =>
+          `<input type="radio" name="wl-${k}" id="wl-${k}-${i}" value="${i}"
+             ${resImp[k] === i ? "checked" : ""}><label for="wl-${k}-${i}">${s}</label>`).join("")
+      + `</span></div>`).join("");
+  };
+  drawWeights();
+
+  /**
+   * Re-score, re-sort and redraw the ranked postings table.
+   * @returns {void} applies the two hard filters, scores every surviving row with the
+   *   current chip weights, and renders the top RES_TOP. With every chip Off there is
+   *   nothing to rank, and it says so instead.
+   */
+  const drawMatches = () => {
+    resFilters = { years: filtYears.checked, levels: filtLevels.checked };
+    const resWeights = resWeightsOf(resImp);
+    const myYears = prof.years_experience || 0;
+    const wantLevels = new Set(prof.levels || []);
+    const shown = data.results.filter(r => {
+      // an unstated requirement (0/null) always survives: it is missing data, not a 0-year role
+      if (resFilters.years && r.years_experience && r.years_experience > myYears) return false;
+      if (resFilters.levels && wantLevels.size && r.skill_level && !wantLevels.has(r.skill_level)) return false;
+      return true;
+    });
+    if (!Object.values(resWeights).some(Boolean)) {
+      matchInfo.textContent = "";
+      matchOut.innerHTML = `<p class="tm-empty">Everything is Off — turn at least one back on
+        to rank these ${data.results.length} postings.</p>`;
+      resPrevRank = null;
+      return;
+    }
+    for (const r of shown) r._s = resScore(r.features, resWeights, data.fills);
+    shown.sort((a, b) => b._s - a._s);
+    const top = shown.slice(0, RES_TOP);
+    matchInfo.textContent = `showing top ${top.length} of ${shown.length}`
+      + (data.pending ? ` · ${data.pending} not embedded` : "");
+
+    const rankNow = new Map(shown.map((r, i) => [r.id, i]));
+    /**
+     * How far one posting moved since the last draw.
+     *
+     * The answer to "did that do anything?", which a re-sorted table on its own never
+     * gives you. Ranks come from the full filtered list, so a row can move without
+     * entering or leaving the top N.
+     *
+     * @param {object} r - a result row.
+     * @returns {string} a ▲/▼ marker, or "" when it didn't move or wasn't there before.
+     */
+    const moved = r => {
+      const was = resPrevRank && resPrevRank.get(r.id);
+      if (was === undefined || was === null) return "";
+      const d = was - rankNow.get(r.id);
+      return d > 0 ? `<span class="delta up" title="up ${d}">▲${d}</span>`
+           : d < 0 ? `<span class="delta down" title="down ${-d}">▼${-d}</span>` : "";
+    };
+
+    matchOut.innerHTML = top.length ? `<table class="mkt-table">
+      <thead><tr><th class="num">Match</th><th>Title</th><th>Company</th><th>Location</th><th>Why</th></tr></thead>
+      <tbody>${top.map(r => `<tr>
+        <td class="score">${Math.round(r._s * 100)}%${moved(r)}</td>
+        <td>${safeHref(r.url) ? `<a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.title)}</a>` : esc(r.title)}</td>
+        <td>${esc(r.company || "")}</td>
+        <td>${esc(r.location || "")}</td>
+        <td>${resFeatCells(r, prof)}</td>
+      </tr>`).join("")}</tbody></table>
+      <div class="tm-key"><span>A feature shown as <span class="off">—</span> was never
+      extracted for that posting; it scores as the average across these ${data.results.length}
+      postings, so a gap is neither rewarded nor punished. Run the Job search tab's Check
+      to fill more in.</span></div>`
+      : `<p class="tm-empty">Nothing passes those filters.</p>`;
+    resPrevRank = rankNow;
+  };
+
+  // One delegated listener for all six groups; the radio's name carries the feature.
+  wBox.onchange = ev => {
+    const k = (ev.target.name || "").slice(3);
+    if (!(k in RES_LABELS)) return;
+    resImp[k] = Number(ev.target.value);
+    localStorage.setItem(RES_IMP_KEY, JSON.stringify(resImp));
+    drawMatches();
+  };
+  root.querySelector("#resWreset").onclick = ev => {
+    ev.preventDefault();
+    resImp = { ...RES_IMP_DEFAULT };
+    localStorage.removeItem(RES_IMP_KEY);
+    drawWeights();
+    drawMatches();
+  };
+  filtYears.onchange = drawMatches;
+  filtLevels.onchange = drawMatches;
+  drawMatches();
+}
+
+/**
+ * Self-test: the busy flag survives a re-render, and fmtElapsed's formatting.
+ *
+ * The point of the flag: a re-render mid-run rebuilds the button, and the new one has
+ * to come back disabled and labelled without the run knowing it happened.
+ *
+ * @returns {Promise<void>} console assertions, run against two throwaway buttons that
+ *   are always removed afterwards.
+ */
+async function busySelfTest() {
+  const box = document.createElement("div");
+  box.innerHTML = `<button id="btA" class="job">A</button><button id="btB" class="job">B</button>`;
+  document.body.appendChild(box);
+  try {
+    await runJob(document.getElementById("btA"), "Running…", async () => {
+      eq(document.getElementById("btB").disabled, true, "busy: the other job button is disabled too");
+      box.innerHTML = `<button id="btA" class="job">A</button><button id="btB" class="job">B</button>`;  // re-render
+      eq(document.getElementById("btA").disabled, false, "busy: a fresh button starts enabled");
+      paintBusy();
+      eq(document.getElementById("btA").disabled, true, "busy: repaint re-disables the fresh button");
+      eq(document.getElementById("btA").textContent, "Running…", "busy: repaint restores the label");
+      // what runRemote does on each poll: the elapsed count rides on the same repaint
+      busy.elapsed = 80; paintBusy();
+      eq(document.getElementById("btA").textContent, "Running… 1m 20s", "busy: elapsed shown on the button");
+    });
+    eq(document.getElementById("btA").disabled, false, "busy: cleared when the run ends");
+    eq(document.getElementById("btA").textContent, "A", "busy: idle label restored on the fresh button");
+    eq(busy, null, "busy: flag cleared");
+
+    eq(fmtElapsed(0), "0s", "elapsed: a job that just started");
+    eq(fmtElapsed(8.4), "8s", "elapsed: rounded to whole seconds");
+    eq(fmtElapsed(59), "59s", "elapsed: still seconds up to a minute");
+    eq(fmtElapsed(60), "1m 00s", "elapsed: seconds are zero-padded past the minute");
+    eq(fmtElapsed(605), "10m 05s", "elapsed: long runs read cleanly");
+  } finally {
+    box.remove();
+  }
+  console.log("busy self-test done");
+}
+
+/**
+ * Self-test: resScore's imputation matches resume.combine(), the chips are
+ * relative-only, resLoadImp validates, and resumeGap weights by prevalence.
+ * @returns {void} console assertions.
+ */
+function resumeSelfTest() {
+  const W = { semantic: .27, skills: .32, years: .17, level: .12, recency: .12 };
+  eq(resScore({}, W), 0, "no features does not divide by zero");
+  eq(resScore({ skills: null, years: null }, W), 0, "all-null does not divide by zero");
+  eq(resScore({ skills: 1 }, { skills: .3 }), 1, "one present feature is its own mean");
+  eq(resScore({ skills: 0.5 }, { skills: .3 }), 0.5, "single feature passes through");
+  const full = { semantic: .8, skills: 1, years: 1, level: 1, recency: 1 };
+  eq(resScore({ ...full, years: null, level: null }, W) > resScore({ ...full, years: 0, level: 0 }, W),
+     true, "missing beats zero");
+  eq(resScore({ skills: 1, semantic: 0 }, { skills: 1, semantic: 0 }), 1, "zero weight drops out");
+
+  // the imputation must match resume.combine() in Python, or the chips would re-rank
+  // into a different order than the server sent
+  const F = { semantic: .5, skills: .17, years: .75, level: 1, recency: .79 };
+  const miss = { semantic: .6, skills: null, years: .7, level: 1, recency: .8 };
+  eq(Math.round(resScore(miss, W, F) * 1e9) / 1e9,
+     Math.round(resScore({ ...miss, skills: F.skills }, W, F) * 1e9) / 1e9,
+     "missing == average, exactly");
+  eq(resScore({ ...miss, skills: .6 }, W, F) > resScore(miss, W, F), true,
+     "real above-average skills beat missing skills");
+  eq(resScore(miss, W, F) > resScore({ ...miss, skills: .02 }, W, F), true,
+     "missing skills beat genuinely poor coverage");
+  eq(resScore({ skills: null, recency: 1 }, { skills: .3, recency: .1 }, {}), 1,
+     "no fill available -> renormalize over what is left");
+
+  // the chips are relative-only: a uniform shift must not change the ranking
+  const feats = { semantic: .4, skills: .9, years: .3, level: 1, recency: .5 };
+  const lvA = { semantic: 1, skills: 1, years: 1, level: 1, recency: 1 };
+  const lvB = { semantic: 3, skills: 3, years: 3, level: 3, recency: 3 };
+  eq(resScore(feats, resWeightsOf(lvA), F), resScore(feats, resWeightsOf(lvB), F),
+     "all-Low scores identically to all-High");
+  eq(resWeightsOf({ ...RES_IMP_DEFAULT, recency: 0 }).recency, 0, "Off is weight 0");
+
+  eq(resLoadImp(null), RES_IMP_DEFAULT, "no saved levels -> defaults");
+  eq(resLoadImp("{oops"), RES_IMP_DEFAULT, "corrupt JSON -> defaults");
+  eq(resLoadImp('{"skills":99,"nope":2}'), RES_IMP_DEFAULT, "out-of-range and unknown keys ignored");
+  eq(resLoadImp('{"skills":0}').skills, 0, "a saved Off round-trips");
+  eq(resLoadImp('{"skills":"3"}').skills, RES_IMP_DEFAULT.skills, "a string is not a level");
+
+  const rs = new Set(["python", "go"]);
+  const g = resumeGap([{ skills: "Python, Rust" }, { skills: "Python" }], rs);
+  eq(g.n, 2, "posting count is the denominator");
+  eq(g.skills.find(s => s.label === "Python").rate, 1, "in every posting");
+  eq(g.skills.find(s => s.label === "Python").have, true, "matched case-insensitively");
+  eq(g.skills.find(s => s.label === "Rust").have, false, "not on the resume");
+  eq(Math.round(g.coverage * 100), 67, "coverage weighted by prevalence: 1.0 of 1.5");
+  eq(resumeGap([], rs).coverage, 0, "empty slice does not divide by zero");
+  console.log("resume self-test done");
+}
+
+/**
+ * Self-test: parseSalary across the range of formats postings actually write.
+ * @returns {void} console assertions.
+ */
+function parseSalarySelfTest() {
+  const ps = s => { const r = parseSalary(s); return r && [Math.round(r.lo), Math.round(r.hi)]; };
+  eq(ps("$225,000 - $320,000"),        [225000, 320000], "plain range");
+  eq(ps("$170K - $320K base salary"),  [170000, 320000], "K notation + trailing words");
+  eq(ps("180k - 300k"),                [180000, 300000], "no dollar sign, lowercase k");
+  eq(ps("$163,418—$285,982 USD"),      [163418, 285982], "em-dash + USD suffix");
+  eq(ps("$175,000 to $200,000"),       [175000, 200000], "'to' separator");
+  eq(ps("USD$220,000.00 - $275,000.00"),[220000, 275000], "USD prefix + cents");
+  eq(ps("$45 / hour"),                 [93600, 93600],   "hourly is annualized (45 * 2080)");
+  eq(parseSalary(""),                  null,             "empty is null");
+  eq(parseSalary("Competitive"),       null,             "no digits is null");
+  eq(parseSalary("$5,000"),            null,             "below the salary floor is rejected");
+  console.log("parseSalary self-test done");
+}
+/**
+ * Self-test: titleBucket prefers the profile's own terms, with the keyword fallback
+ * only when none are set.
+ * @returns {void} console assertions.
+ */
+function titleBucketSelfTest() {
+  const terms = ["Machine Learning", "Data Scientist"];
+  eq(titleBucket("Senior Machine Learning Engineer", terms), "Machine Learning", "matches a search term");
+  eq(titleBucket("Sr. Data Scientist", terms),               "Data Scientist",   "matches the other term");
+  eq(titleBucket("Product Manager", terms),                  "Other",            "no search term -> Other");
+  // fallback keyword buckets when no search titles are set
+  eq(titleBucket("Staff Software Engineer", []),             "Software Engineer","empty terms -> keyword fallback");
+  eq(titleBucket("Chief Happiness Officer", []),             "Other",            "keyword fallback still has Other");
+  console.log("titleBucket self-test done");
+}
+/**
+ * Self-test: locationBucket uses locations.py's mapping when there is one, and the
+ * METROS fallback when there isn't.
+ * @returns {void} console assertions.
+ */
+function locationBucketSelfTest() {
+  // mapped by locations.py — the raw string is ignored entirely
+  eq(locationBucket("Hybrid (NYC Metro)", "New York"), ["New York"], "mapped: raw shape is irrelevant");
+  eq(locationBucket("SF | NYC | Seattle", "San Francisco,New York,Seattle"),
+     ["San Francisco", "New York", "Seattle"], "mapped: several cities");
+  eq(locationBucket("San Francisco, CA or Remote, US", "San Francisco,Remote"),
+     ["San Francisco", "Remote"], "mapped: city and Remote both count");
+  eq(locationBucket("Bengaluru, KA", " Bangalore , "), ["Bangalore"], "mapped: blanks and padding trimmed");
+  // unmapped — the fallback, for rows locations.py has not reached
+  eq(locationBucket("San Francisco, California, United States"), "San Francisco", "known metro by substring");
+  eq(locationBucket("San Francisco Bay Area (Hybrid)"), "San Francisco", "metro collapses variants");
+  eq(locationBucket("New York Office"), "New York", "metro ignores trailing words");
+  eq(locationBucket("San Francisco, CA, US; Remote, US"), "San Francisco", "named city beats remote");
+  eq(locationBucket("Remote - US"), "Remote",   "remote is detected");
+  eq(locationBucket("Lincoln, Nebraska"), "Lincoln", "unknown place -> first comma segment");
+  eq(locationBucket("Hybrid (NYC Metro)", ""), "Hybrid (NYC Metro)", "empty mapping falls through to raw");
+  eq(locationBucket(""),            "Other",    "empty falls to Other");
+  console.log("locationBucket self-test done");
+}
+/**
+ * Self-test: salaryGroups fans a multi-key row into every bucket.
+ * @returns {void} console assertions.
+ */
+function salaryGroupsSelfTest() {
+  const row = (lo, hi, key) => ({ _sal: { lo, hi }, key });
+  const one = salaryGroups([row(100, 200, "A")], r => r.key);
+  eq(one.length, 1, "string key still makes one group");
+  eq(one[0].n, 1, "string key counts once");
+  const fan = salaryGroups([row(100, 200, ["A", "B"])], r => r.key);
+  eq(fan.map(g => g.label).sort(), ["A", "B"], "array key fans out to every bucket");
+  eq(fan.every(g => g.n === 1 && g.loMean === 100), true, "each bucket gets the whole band");
+  eq(salaryGroups([row(100, 200, [])], r => r.key)[0].label, "Other", "no keys -> Other");
+  console.log("salaryGroups self-test done");
+}
+/**
+ * Self-test: salaryRangeSVG's group labels fit inside their gutter.
+ *
+ * The one thing that actually broke here: group labels are end-anchored in a fixed
+ * left gutter, so a long one ("Machine Learning Engineer") ran off x=0 and got chopped
+ * by the viewBox. Only the browser can answer "does this text fit" — so this measures
+ * it with getBBox rather than estimating from character counts, which is exactly the
+ * guess that let the bug through.
+ *
+ * @returns {void} console assertions, run against a hidden off-screen host that is
+ *   always removed afterwards.
+ */
+function salaryRangeSVGSelfTest() {
+  const g = (label, n) => ({ label, n, loMean: 100, loMed: 100, loSD: 10, hiMean: 200, hiMed: 200, hiSD: 20 });
+  // render the chart off-screen and ask the browser whether every label starts at x >= 0
+  const fits = labels => {
+    const host = document.createElement("div");
+    host.style.cssText = "position:absolute;visibility:hidden;left:0;top:0";
+    host.innerHTML = salaryRangeSVG(labels.map(l => g(l, 104)), 1200);
+    document.body.appendChild(host);
+    const xs = [...host.querySelectorAll("text")].map(t => t.getBBox().x);
+    host.remove();
+    return Math.min(...xs) >= 0;
+  };
+  eq(fits(["Data Scientist", "AI Engineer"]), true, "short labels fit the gutter");
+  eq(fits(["Machine Learning Engineer", "Forward Deployed Engineer"]), true,
+     "the profile's own 25-char titles fit — these are the ones that used to be chopped");
+  eq(fits(["Applied Research Scientist"]), true, "a title at the 26-char cap fits");
+  eq(salaryRangeSVG([g("Senior Machine Learning Infrastructure Engineer", 3)], 1200).includes("…"),
+     true, "past the cap the label is clipped rather than chopped");
+  console.log("salaryRangeSVG self-test done");
+}
+
+if (location.hash === "#selftest") { timingSelfTest(); titleFilterSelfTest(); locationFilterSelfTest(); levelFilterSelfTest(); mktSortSelfTest(); safeHrefSelfTest(); parseSalarySelfTest(); titleBucketSelfTest(); locationBucketSelfTest(); salaryGroupsSelfTest(); salaryRangeSVGSelfTest(); resumeSelfTest(); busySelfTest(); }
+
+/**
+ * Draw the Job search tab: the search profile, and the table of logged matches.
+ * @returns {Promise<void>} replaces #market's contents and wires everything —
+ *   the profile save, the Scan button, the three Check buttons, the title filter,
+ *   the level checkboxes, and the sortable column headers. The filter and sort run
+ *   over rows already on the page; only Save, Scan and Check hit the server.
+ */
+async function renderMarket() {
+  const root = document.getElementById("market");
+  const [profile, rows] = await Promise.all([
+    api("GET", "/api/research/profile"),
+    api("GET", "/api/research/matches"),
+  ]);
+
+  root.innerHTML = `
+    <div class="mkt-profile">
+      <h2>Search profile</h2>
+      <div class="mkt-fields">
+        <label>Job titles (one per line)<textarea id="mktTitles" rows="4"></textarea></label>
+        <label>Locations (one per line — blank = anywhere)<textarea id="mktLocations" rows="4"></textarea></label>
+        <fieldset id="mktLevels"><legend>Seniority (none = all)</legend></fieldset>
+      </div>
+      <div class="mkt-actions">
+        <button id="mktSave">Save profile</button>
+        <button id="mktScan" class="job">Scan</button>
+        <button id="mktCheck" class="job" title="Visit every posting shown below: hide the dead ones, fill in salary, years and skills">Check postings</button>
+        <button id="mktCheckAlive" class="job" title="Visit every posting shown below and hide the dead ones — no salary/years/skills, so no model calls (fast)">Check alive</button>
+        <button id="mktCheckNew" class="job" title="Visit every posting shown below and hide the dead ones, but only send postings that have no salary/years/skills yet to the model">Check new</button>
+        <span class="mkt-info" id="mktInfo"></span>
+      </div>
+    </div>
+    <div class="mkt-filter">
+      <label for="mktFilter">Filter titles</label>
+      <input id="mktFilter" type="search" placeholder="senior -staff -principal" autocomplete="off">
+      <span class="mkt-info" id="mktCount"></span>
+    </div>
+    <table class="mkt-table">
+      <thead><tr>
+        <th data-sort="title"><button class="sort" type="button">Title</button></th>
+        <th data-sort="company"><button class="sort" type="button">Company</button></th>
+        <th data-sort="location"><button class="sort" type="button">Location</button></th>
+        <th data-sort="skill_level"><button class="sort" type="button">Level</button></th>
+        <th>Salary</th><th>Years</th>
+        <th>URL</th><th></th>
+      </tr></thead>
+      <tbody id="mktRows"></tbody>
+    </table>`;
+
+  root.querySelector("#mktTitles").value = (profile.titles || []).join("\n");
+  root.querySelector("#mktLocations").value = (profile.locations || []).join("\n");
+
+  const levelsBox = root.querySelector("#mktLevels");
+  const ticked = mktLevels ?? profile.levels ?? [];
+  for (const lvl of LEVELS) {
+    const lab = document.createElement("label");
+    lab.innerHTML = `<input type="checkbox" value="${lvl}"><span></span>`;
+    lab.querySelector("span").textContent = lvl;
+    lab.querySelector("input").checked = ticked.includes(lvl);
+    levelsBox.appendChild(lab);
+  }
+  // the seniority boxes ticked right now, read straight off the DOM
+  const checkedLevels = () => [...levelsBox.querySelectorAll("input:checked")].map(c => c.value);
+
+  const info = root.querySelector("#mktInfo");
+  info.textContent = `Last scanned: ${profile.last_scanned || "never"} · ${rows.length} match${rows.length === 1 ? "" : "es"}`;
+
+  const tbody = root.querySelector("#mktRows");
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="mkt-empty">No matches yet — set a profile and Scan.</td></tr>`;
+  }
+  const trs = [];
+  for (const m of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="t"></td><td class="c"></td><td class="l"></td>
+      <td class="level"></td><td class="salary"></td><td class="yrs"></td><td class="url"></td>
+      <td><button class="del" title="Remove">&times;</button></td>`;
+    tr.querySelector(".t").textContent = m.title;
+    tr.querySelector(".c").textContent = m.company;
+    tr.querySelector(".l").textContent = m.location || "";
+    tr.querySelector(".level").textContent = m.skill_level || "";
+    tr.querySelector(".salary").textContent = m.salary || "";
+    // 0 means the posting states no requirement, null means we haven't checked it — both blank
+    tr.querySelector(".yrs").textContent = m.years_experience || "";
+    if (m.url && safeHref(m.url)) {
+      const a = document.createElement("a");
+      // set as a property, not interpolated into innerHTML, so a scraped url can't inject attributes
+      a.href = m.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.title = m.url;
+      a.textContent = m.url;
+      tr.querySelector(".url").appendChild(a);
+    } else if (m.url) {
+      tr.querySelector(".url").textContent = m.url;   // a javascript:/data: url stays visible but inert, never clickable
+    }
+    tr.querySelector(".del").onclick = async () => {
+      await api("DELETE", `/api/research/matches/${m.id}`);
+      tr.remove();
+      trs.splice(trs.findIndex(x => x[0] === tr), 1);
+      applyFilter();                    // keep the "n of m shown" count honest
+    };
+    tbody.appendChild(tr);
+    trs.push([tr, m]);
+  }
+
+  const filterBox = root.querySelector("#mktFilter");
+  const count = root.querySelector("#mktCount");
+  /**
+   * Show or hide each row against the title box and the level checkboxes.
+   * @returns {void} updates the "n of m shown" count too. Rows are hidden with
+   *   `display`, not `hidden` — the UA's `tr { display: table-row }` can beat
+   *   `[hidden]`.
+   */
+  const applyFilter = () => {
+    const pass = titleFilter(filterBox.value);
+    const passLevel = levelFilter(checkedLevels());
+    let shown = 0;
+    for (const [tr, m] of trs) {
+      const ok = pass(m.title) && passLevel(m.skill_level);
+      tr.style.display = ok ? "" : "none";
+      if (ok) shown++;
+    }
+    count.textContent = trs.length ? `${shown} of ${trs.length} shown` : "";
+  };
+  filterBox.oninput = applyFilter;
+  levelsBox.onchange = () => { mktLevels = checkedLevels(); applyFilter(); };   // change bubbles from the checkboxes
+
+  const headers = [...root.querySelectorAll("th[data-sort]")];
+  /**
+   * Re-order the table to the active sort, and mark the header that drives it.
+   * @returns {void} reorders the trs array, then re-appends each row. appendChild
+   *   moves an existing node, so every row keeps its listeners and its filtered-out
+   *   display state. No key set means the DB's own order stands.
+   */
+  const applySort = () => {
+    for (const th of headers) {
+      const active = th.dataset.sort === mktSort.key;
+      th.setAttribute("aria-sort", !active ? "none" : mktSort.dir > 0 ? "ascending" : "descending");
+      th.querySelector(".sort").dataset.arrow = active ? (mktSort.dir > 0 ? "▲" : "▼") : "";
+    }
+    if (!mktSort.key) return;
+    trs.sort(byField(mktSort.key, mktSort.dir));   // stable, so ties keep newest-first DB order
+    for (const [tr] of trs) tbody.appendChild(tr);
+  };
+  for (const th of headers) {
+    th.querySelector(".sort").onclick = () => {
+      const key = th.dataset.sort;
+      mktSort = { key, dir: mktSort.key === key ? -mktSort.dir : 1 };
+      applySort();
+    };
+  }
+
+  applySort();     // re-apply the sort carried over from the last render
+  applyFilter();
+
+  root.querySelector("#mktSave").onclick = async () => {
+    try {
+      await api("PATCH", "/api/research/profile", {
+        titles: linesToList(root.querySelector("#mktTitles").value),
+        locations: linesToList(root.querySelector("#mktLocations").value),
+        levels: checkedLevels(),
+      });
+      renderMarket();
+    } catch (err) {
+      alert("Could not save profile: " + err.message);
+    }
+  };
+
+  const scanBtn = root.querySelector("#mktScan");
+  scanBtn.onclick = () => runJob(scanBtn, "Scanning…", async () => {
+    try {
+      const res = await runRemote("POST", "/api/research/scan");   // polls until research.py finishes
+      if (!res.ok) alert("Scan had problems — check the terminal running the app.");
+      await renderMarket();
+    } catch (err) {
+      alert("Scan failed: " + err.message);
+    }
+  });
+
+  // The three Check buttons differ only in the mode they post; enrich.py does the rest.
+  // All three visit every posting shown, so all three prune the dead ones — they differ
+  // in which rows reach the model, which is what a run's time is actually spent on.
+  const CHECK_MODES = {
+    mktCheck:      { mode: "full",  ask: n => `Visit ${n} posting${n === 1 ? "" : "s"} and enrich them all? Dead ones will be hidden.` },
+    mktCheckAlive: { mode: "alive", ask: n => `Visit ${n} posting${n === 1 ? "" : "s"} for liveness only? Dead ones will be hidden; salary/years/skills stay as they are.` },
+    mktCheckNew:   { mode: "new",   ask: n => `Visit ${n} posting${n === 1 ? "" : "s"} and enrich only the ones not enriched yet? Dead ones will be hidden.` },
+  };
+  for (const id of Object.keys(CHECK_MODES)) {
+    const btn = root.querySelector("#" + id);
+    const { mode, ask } = CHECK_MODES[id];
+    btn.onclick = () => {
+      // only the rows actually on screen, so the title/level filters bound the run
+      const ids = trs.filter(([tr]) => tr.style.display !== "none").map(([, m]) => m.id);
+      if (!ids.length) return alert("No postings shown — nothing to check.");
+      if (!confirm(ask(ids.length))) return;
+      return runJob(btn, "Checking…", async () => {     // one run at a time; they share the DB
+        try {
+          const res = await runRemote("POST", "/api/research/check", { ids, mode });  // polls until enrich.py finishes
+          if (!res.ok) alert("Check had problems — see the terminal running the app.");
+          await renderMarket();
+          // A check re-embeds what it rewrote, so every resume score just moved. Switching
+          // to that tab refetches anyway (VIEWS.resume.render); this is for the case the
+          // tab is already open — a check blocks for minutes, which is long enough to go
+          // wait on the resume screen and watch it not update. Skipped when it's hidden:
+          // the next activation does the same fetch.
+          if (document.getElementById("resume").classList.contains("active"))
+            await renderResume();
+        } catch (err) {
+          alert("Check failed: " + err.message);
+        }
+      });
+    };
+  }
+
+  paintBusy();   // a run started before this render (tab switch) still owns these buttons
+}
+
+// --- tabs ---
+// Each entry names its tab button, its view element, and how to (re)draw it.
+const VIEWS = {
+  board:   { tab: "tabBoard",    el: "board",   render: () => {} },          // render() already ran in load()
+  timing:  { tab: "tabTiming",   el: "timing",  render: () => renderTiming(allJobs) },
+  heatmap: { tab: "tabActivity", el: "heatmap", render: () => renderHeatmap(allJobs) },
+  flow:    { tab: "tabFlow",     el: "flow",    render: () => renderFlow(allJobs) },
+  market:  { tab: "tabMarket",   el: "market",  render: renderMarket },
+  salary:  { tab: "tabSalary",   el: "salary",  render: renderSalary },
+  resume:  { tab: "tabResume",   el: "resume",  render: renderResume },
+};
+/**
+ * Switch to one tab.
+ * @param {string} name - a key of VIEWS.
+ * @returns {void} moves the active class on both the button and the view, and renders
+ *   the one that just became active.
+ */
+function showTab(name) {
+  for (const [key, v] of Object.entries(VIEWS)) {
+    const active = key === name;
+    document.getElementById(v.tab).classList.toggle("active", active);
+    document.getElementById(v.el).classList.toggle("active", active);
+    if (active) v.render();
+  }
+}
+for (const [name, v] of Object.entries(VIEWS))
+  document.getElementById(v.tab).onclick = () => showTab(name);
+
+/**
+ * Redraw whichever view is currently on screen.
+ * @returns {void} used after a resize and after a theme flip, both of which
+ *   invalidate charts without changing any data.
+ */
+const renderActive = () => {
+  for (const v of Object.values(VIEWS))
+    if (document.getElementById(v.el).classList.contains("active")) v.render();
+};
+
+// The SVG charts measure clientWidth once at render and never again, so a resize past
+// a breakpoint would otherwise leave them drawn at the old width. One debounced
+// handler covers every view, rather than a ResizeObserver each.
+let resizeT;
+addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(renderActive, 150); });
+
+// --- theme ---
+const themeBtn = document.getElementById("themeBtn");
+
+/**
+ * Label the theme button with what pressing it will do.
+ * @returns {void} sets both the text and the aria-label from the current theme, so
+ *   the button reads as the opposite of what is on screen.
+ */
+const labelTheme = () => {
+  const dark = document.documentElement.dataset.theme === "dark";
+  themeBtn.textContent = dark ? "Light" : "Dark";
+  themeBtn.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+};
+labelTheme();
+themeBtn.onclick = () => {
+  const root = document.documentElement;
+  const next = root.dataset.theme === "dark" ? "light" : "dark";
+  root.classList.add("theme-switching");
+  root.dataset.theme = localStorage.theme = next;
+  void root.offsetWidth;   // commit the new values before transitions come back on
+  root.classList.remove("theme-switching");
+  labelTheme();
+  renderActive();          // charts that cache a measured width redraw against the new tokens
+};
+
+document.getElementById("add").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api("POST", "/api/jobs", {
+      company: f.company.value,
+      title: f.title.value,
+      applied_date: f.applied_date.value,
+    });
+    f.reset();
+    document.getElementById("addPanel").open = false;
+    load();
+  } catch (err) {
+    alert("Could not add job: " + err.message);
+  }
+});
+
+const dialog = document.getElementById("editDialog");
+const editForm = document.getElementById("editForm");
+let editingId = null;
+
+/**
+ * Open the edit dialog on one application.
+ * @param {object} job - the row to edit.
+ * @returns {void} fills the form, lists whichever milestone dates the job carries
+ *   (each with a Delete that clears it and reloads the board behind the dialog), and
+ *   shows the modal. The form's own submit handler saves the rest.
+ */
+function openEdit(job) {
+  editingId = job.id;
+  editForm.elements.company.value = job.company;
+  editForm.elements.title.value = job.title;
+  editForm.elements.applied_date.value = job.applied_date;
+
+  const box = document.getElementById("editMilestones");
+  box.innerHTML = "";
+  for (const [field, label] of MILESTONES) {
+    if (!job[field]) continue;
+    const row = document.createElement("div");
+    row.className = "edit-ms";
+    row.innerHTML = `<span class="lbl"></span><span class="val"></span><button type="button" class="clear">Delete</button>`;
+    row.querySelector(".lbl").textContent = label;
+    row.querySelector(".val").textContent = job[field];
+    row.querySelector(".clear").onclick = async () => {
+      try {
+        await api("PATCH", `/api/jobs/${job.id}`, { [field]: "" });
+        row.remove();
+        load();  // refresh the board behind the dialog
+      } catch (err) {
+        alert("Could not delete date: " + err.message);
+      }
+    };
+    box.appendChild(row);
+  }
+  dialog.showModal();
+}
+
+document.getElementById("editCancel").onclick = () => dialog.close();
+
+editForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  try {
+    await api("PATCH", `/api/jobs/${editingId}`, Object.fromEntries(new FormData(editForm)));
+    dialog.close();
+    load();
+  } catch (err) {
+    alert("Could not save: " + err.message);
+  }
+});
+
+const syncBtn = document.getElementById("syncBtn");
+const lastSynced = document.getElementById("lastSynced");
+
+/**
+ * Write the sync watermark into the header.
+ * @param {string|null} d - the last-synced date, or null when there isn't one.
+ * @returns {string} the text that was set.
+ */
+const showSynced = d => lastSynced.textContent = "Last synced: " + (d || "never");
+
+syncBtn.onclick = () => runJob(syncBtn, "Syncing…", async () => {
+  try {
+    const res = await runRemote("POST", "/api/sync");   // polls until ingest finishes
+    showSynced(res.last_synced);
+    if (!res.ok) alert("Sync had problems — check the terminal running the app.");
+    await load();
+  } catch (err) {
+    alert("Sync failed: " + err.message);
+  }
+});
+
+const authBtn = document.getElementById("authBtn");
+// "Reconnecting…" — opens a Google consent tab if the refresh token is dead
+authBtn.onclick = () => runJob(authBtn, "Reconnecting…", async () => {
+  try {
+    await api("POST", "/api/auth");
+    alert("Gmail reconnected. You can Sync now.");
+  } catch (err) {
+    alert("Reconnect failed: " + err.message);
+  }
+});
+
+api("GET", "/api/sync").then(r => showSynced(r.last_synced)).catch(() => {});
+load();
+</script>
+</body>
+</html>
