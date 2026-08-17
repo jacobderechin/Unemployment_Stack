@@ -99,7 +99,8 @@
 
   /* --- buttons: two kinds, grouped by role rather than restyled per id --- */
   button { font: inherit; cursor: pointer; }
-  #syncBtn, #addPanel > summary, #add button, #editForm button.save, #mktScan {
+  #syncBtn, #addPanel > summary, #add button, #editForm button.save, #mktScan,
+  #mktAddPanel > summary, #mktAddForm button[type=submit] {
     padding: 7px 14px; border: 1px solid var(--ink); border-radius: var(--r-sm);
     background: var(--ink); color: var(--ground);
     font-family: var(--font-display); font-size: var(--t-sm); letter-spacing: -.01em;
@@ -107,16 +108,18 @@
   }
   /* .mkt-actions button covers Check postings/alive/new; #mktScan outranks it and
      stays primary, since scanning is the action that tab exists for. */
-  #authBtn, #themeBtn, #mktSave, #editForm button.cancel, .mkt-actions button {
+  #authBtn, #themeBtn, #mktSave, #editForm button.cancel, .mkt-actions button, #mktFetch {
     padding: 7px 14px; border: 1px solid var(--rule-strong); border-radius: var(--r-sm);
     background: transparent; color: var(--ink);
     font-family: var(--font-display); font-size: var(--t-sm); letter-spacing: -.01em;
     transition: background-color .12s, color .12s, border-color .12s;
   }
   #authBtn:hover, #themeBtn:hover, #mktSave:hover,
-  #editForm button.cancel:hover, .mkt-actions button:hover { background: var(--sunk); }
+  #editForm button.cancel:hover, .mkt-actions button:hover, #mktFetch:hover { background: var(--sunk); }
   #syncBtn:hover, #addPanel > summary:hover, #add button:hover,
-  #editForm button.save:hover, #mktScan:hover { background: var(--ink-2); border-color: var(--ink-2); }
+  #editForm button.save:hover, #mktScan:hover,
+  #mktAddPanel > summary:hover, #mktAddForm button[type=submit]:hover { background: var(--ink-2); border-color: var(--ink-2); }
+  #mktFetch:disabled { opacity: .5; cursor: progress; }
   button.job:disabled { opacity: .5; cursor: progress; }
 
   input, textarea, select {
@@ -307,6 +310,16 @@
   .mkt-filter { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
   .mkt-filter label { font-size: var(--t-sm); color: var(--ink-2); }
   .mkt-filter input { flex: 1; max-width: 360px; }
+  /* Same popover idiom as the header's "+ Add job" (#addPanel/#add): a disclosure whose
+     form is absolutely positioned, so opening it overlays the table instead of reflowing it. */
+  #mktAddPanel { position: relative; }
+  #mktAddPanel > summary { display: inline-block; list-style: none; user-select: none; }
+  #mktAddPanel > summary::-webkit-details-marker { display: none; }
+  #mktAddForm { position: absolute; top: calc(100% + 8px); left: 0; z-index: 20;
+                display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+                padding: 12px; background: var(--surface);
+                border: 1px solid var(--rule); border-radius: var(--r-md); box-shadow: var(--shadow-dialog); }
+  #mktAddForm input[name=url] { min-width: 280px; }
 
   /* One table style, shared by four unrelated tables — splitting it buys nothing
      until they actually diverge. */
@@ -2989,6 +3002,17 @@ async function renderMarket() {
     <div class="mkt-filter">
       <label for="mktFilter">Filter titles</label>
       <input id="mktFilter" type="search" placeholder="senior -staff -principal" autocomplete="off">
+      <details id="mktAddPanel">
+        <summary>+ Add posting</summary>
+        <form id="mktAddForm">
+          <input name="url" type="url" placeholder="Job posting URL" required>
+          <button type="button" id="mktFetch">Fetch</button>
+          <input name="company" placeholder="Company" required>
+          <input name="title" placeholder="Job title" required>
+          <input name="location" placeholder="Location">
+          <button type="submit">Add</button>
+        </form>
+      </details>
       <span class="mkt-info" id="mktCount"></span>
     </div>
     <table class="mkt-table">
@@ -3122,6 +3146,47 @@ async function renderMarket() {
       alert("Could not save profile: " + err.message);
     }
   };
+
+  const addForm = root.querySelector("#mktAddForm");
+
+  // Fetch: read title/company/location off the pasted page (one Ollama call, a few
+  // seconds) and prefill the fields so a bad parse is corrected before it's saved.
+  const fetchBtn = root.querySelector("#mktFetch");
+  fetchBtn.onclick = async () => {
+    const url = addForm.url.value.trim();
+    if (!url) return alert("Paste a job posting URL first.");
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = "Reading…";
+    try {
+      const meta = await api("POST", "/api/research/parse", { url });
+      if (meta.title) addForm.title.value = meta.title;
+      if (meta.company) addForm.company.value = meta.company;
+      if (meta.location) addForm.location.value = meta.location;
+      if (!meta.title && !meta.company)
+        alert("Couldn't read the title/company from that page — fill the fields in yourself.");
+    } catch (err) {
+      alert("Could not read that posting: " + err.message);
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = "Fetch";
+    }
+  };
+
+  addForm.addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const res = await api("POST", "/api/research/add", {
+        url: f.url.value, company: f.company.value, title: f.title.value, location: f.location.value,
+      });
+      f.reset();
+      root.querySelector("#mktAddPanel").open = false;
+      if (!res.created) alert("That URL is already in your list.");
+      renderMarket();
+    } catch (err) {
+      alert("Could not add posting: " + err.message);
+    }
+  });
 
   const scanBtn = root.querySelector("#mktScan");
   scanBtn.onclick = () => runJob(scanBtn, "Scanning…", async () => {

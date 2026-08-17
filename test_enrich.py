@@ -54,6 +54,59 @@ def test_jsonld_survives_a_malformed_block():
     assert enrich.jsonld_jobposting(page)["title"] == "Forward Deployed Engineer"
 
 
+def test_meta_signals_keeps_title_meta_and_the_location_from_a_next_data_blob():
+    # a JS-rendered page like mercor: the location lives only inside a big embedded JSON
+    # blob that renders no visible text. _meta_signals must surface it for the model.
+    noise = "x" * 9000
+    body = (f'<title>Staff Engineer | Careers at Acme</title>'
+            f'<meta property="og:title" content="Staff Engineer">'
+            f'<script id="__NEXT_DATA__" type="application/json">'
+            f'{{"pad":"{noise}","job":{{"location":"San Francisco","team":"Eng"}}}}</script>')
+    sig = enrich._meta_signals(body)
+    assert "Staff Engineer" in sig                 # from <title>/<meta>
+    assert "San Francisco" in sig                  # windowed out of the padded blob
+    assert len(sig) <= enrich.META_CHARS           # capped, so the huge blob can't blow up the call
+
+
+def test_meta_signals_falls_back_to_the_body_when_a_page_has_no_signals():
+    body = "<div>just some markup with no title, meta, or json</div>"
+    assert enrich._meta_signals(body) == body[:enrich.META_CHARS]
+
+
+# an Ashby/Greenhouse-shaped page: a real JobPosting blob whose jobLocation sits AFTER a
+# long description — the case that used to get truncated before the model ever saw it.
+JSONLD_WITH_LOCATION = ("""<html><head><title>Research Engineer @ Luma</title></head><body>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"JobPosting","title":"Research Engineer - Evaluations",
+ "description":"<p>""" + ("filler " * 500) + """</p>",
+ "hiringOrganization":{"@type":"Organization","name":"Luma"},
+ "jobLocation":{"@type":"Place","address":{"@type":"PostalAddress",
+   "addressLocality":"Redwood City","addressRegion":"California","addressCountry":"United States"}}}
+</script></body></html>""")
+
+
+def test_fields_from_jsonld_reads_title_company_and_location():
+    f = enrich._fields_from_jsonld(enrich.jsonld_jobposting(JSONLD_WITH_LOCATION))
+    assert f == {"title": "Research Engineer - Evaluations", "company": "Luma",
+                 "location": "Redwood City, California"}
+
+
+def test_jsonld_location_handles_lists_remote_and_missing():
+    assert enrich._jsonld_location({"jobLocation": [{"address": {"addressLocality": "NYC"}}]}) == "NYC"
+    assert enrich._jsonld_location({"jobLocationType": "TELECOMMUTE"}) == "Remote"
+    assert enrich._jsonld_location({}) == ""
+
+
+def test_posting_meta_uses_jsonld_and_never_calls_the_model():
+    # the JobPosting path is deterministic: no Ollama, even when the address is past a
+    # 500-word description (the mercor bug in reverse — here we don't truncate at all).
+    with mock.patch.object(enrich, "fetch", return_value=(200, "u", JSONLD_WITH_LOCATION)), \
+         mock.patch.object(enrich, "chat", side_effect=AssertionError("model must not be called")):
+        assert enrich.posting_meta("https://jobs.ashbyhq.com/luma/x") == {
+            "title": "Research Engineer - Evaluations", "company": "Luma",
+            "location": "Redwood City, California"}
+
+
 # --- liveness: dead -------------------------------------------------------
 
 def test_lever_404_is_dead():
