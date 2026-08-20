@@ -41,7 +41,7 @@ from tqdm import tqdm
 import research  # reuse research.db helpers; importing it does not touch the network
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b")
 ENRICH_CHARS = int(os.environ.get("ENRICH_CHARS", "20000"))  # chars of posting sent to the model
 WORKERS = int(os.environ.get("WORKERS", "8"))                # concurrent url checks; match OLLAMA_NUM_PARALLEL
 ALIVE_WORKERS = int(os.environ.get("ALIVE_WORKERS", "32"))   # --mode alive makes no model calls, so go wider
@@ -326,7 +326,8 @@ def chat(system, user, schema, model=None, timeout=300):
         "format": schema,
         "think": False,
         "stream": False,
-        "options": {"temperature": 0.6, "top_p": 0.95},   # Qwen3 defaults, as in ingest.py
+        # ponytail: num_gpu=99 pins full GPU offload; see the note in ingest.py.
+        "options": {"temperature": 0.6, "top_p": 0.95, "num_gpu": 99},   # Qwen3 defaults, as in ingest.py
     }
     req = urllib.request.Request(
         f"{OLLAMA_URL}/api/chat",

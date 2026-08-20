@@ -26,7 +26,7 @@ from tqdm import tqdm
 import app  # reuse DB helpers; importing app does not start the server
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:4b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b")
 SINCE_DAYS = int(os.environ.get("SINCE_DAYS", "30"))
 BODY_CHARS = int(os.environ.get("BODY_CHARS", "2000"))   # chars of body sent to the model
 WORKERS = int(os.environ.get("WORKERS", "8"))            # concurrent classify requests; match OLLAMA_NUM_PARALLEL
@@ -109,7 +109,11 @@ def classify(email, model=None):
         "format": SCHEMA,
         "think": False,
         "stream": False,
-        "options": {"temperature": 0.6, "top_p": 0.95},  # Qwen3 thinking-mode defaults
+        # ponytail: num_gpu=99 pins every layer to the GPU. Ollama's auto-fit
+        # undercounts this APU's 96G VRAM, offloads ~20/66 layers and spills the
+        # rest (plus an 11G KV cache) into 31G of host RAM, OOM-killing the service.
+        # Drop it if a model ever genuinely exceeds VRAM — 99 fails rather than spills.
+        "options": {"temperature": 0.6, "top_p": 0.95, "num_gpu": 99},  # Qwen3 thinking-mode defaults
     }
     req = urllib.request.Request(
         f"{OLLAMA_URL}/api/chat",
