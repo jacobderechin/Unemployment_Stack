@@ -29,7 +29,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b")
 SINCE_DAYS = int(os.environ.get("SINCE_DAYS", "30"))
 BODY_CHARS = int(os.environ.get("BODY_CHARS", "2000"))   # chars of body sent to the model
-WORKERS = int(os.environ.get("WORKERS", "8"))            # concurrent classify requests; match OLLAMA_NUM_PARALLEL
+WORKERS = int(os.environ.get("WORKERS", "1"))            # concurrent classify requests; a moe model runs -np 1, so extras only queue
 BATCH_SIZE = int(os.environ.get("GMAIL_BATCH", "20"))    # gmail msg.get per batch; lower if 429s
 DEFAULT_TITLE = "(role not specified)"
 

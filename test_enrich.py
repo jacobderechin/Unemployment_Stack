@@ -5,6 +5,7 @@ The fixtures below are the shapes of the four boards actually in the feed, captu
 fetching a live posting and a deliberately-dead one from each. The point of these tests
 is that liveness is NOT a status-code check: only Lever 404s.
 """
+import json
 import sqlite3
 from unittest import mock
 
@@ -452,3 +453,19 @@ if __name__ == "__main__":
         if name.startswith("test_") and callable(fn):
             fn()
     print("ok")
+
+
+# --- unload: the model must not sit resident while embed.py wants the RAM ------
+
+def test_unload_asks_ollama_to_drop_the_model():
+    # keep_alive=0 with no messages is Ollama's unload request. Without it the model
+    # holds VRAM and an 8G host-RAM prompt cache for the whole OLLAMA_KEEP_ALIVE window.
+    with mock.patch("urllib.request.urlopen") as urlopen:
+        enrich.unload("qwen3.6:35b")
+    assert json.loads(urlopen.call_args[0][0].data) == {"model": "qwen3.6:35b", "keep_alive": 0}
+
+
+def test_unload_swallows_an_unreachable_ollama():
+    # the run has already succeeded by this point; a failed courtesy call must not undo it
+    with mock.patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        enrich.unload()

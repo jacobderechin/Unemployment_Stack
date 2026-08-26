@@ -18,7 +18,10 @@ from tqdm import tqdm
 import research  # reuse research.db helpers; importing it does not touch the network
 
 MODEL = os.environ.get("EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
-BATCH = int(os.environ.get("EMBED_BATCH", "16"))
+# 16 OOMs the GPU on a batch of long postings; measured peak is 45 GiB at 8, 23 GiB
+# at 4. Cost scales as batch x seq_len^2, so raise EMBED_BATCH only if your longest
+# description is well under the ~7.5k tokens this was measured against.
+BATCH = int(os.environ.get("EMBED_BATCH", "4"))
 
 # The instruction the resume is encoded with. Qwen3 ships one under the name "query",
 # but it reads "Given a web search query, retrieve relevant passages that answer the

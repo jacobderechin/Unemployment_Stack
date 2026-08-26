@@ -43,7 +43,7 @@ import research  # reuse research.db helpers; importing it does not touch the ne
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b")
 ENRICH_CHARS = int(os.environ.get("ENRICH_CHARS", "20000"))  # chars of posting sent to the model
-WORKERS = int(os.environ.get("WORKERS", "8"))                # concurrent url checks; match OLLAMA_NUM_PARALLEL
+WORKERS = int(os.environ.get("WORKERS", "8"))                # concurrent url checks; sized for http latency, not OLLAMA_NUM_PARALLEL
 ALIVE_WORKERS = int(os.environ.get("ALIVE_WORKERS", "32"))   # --mode alive makes no model calls, so go wider
 MODES = ("full", "alive", "new")
 MIN_TEXT = 500          # a real posting always beats this; Ashby's dead shell is ~51 chars
@@ -339,6 +339,29 @@ def chat(system, user, schema, model=None, timeout=300):
     content = resp["message"]["content"]
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
     return json.loads(content)
+
+
+def unload(model=None):
+    """Ask Ollama to drop the model now, rather than after OLLAMA_KEEP_ALIVE.
+
+    Inputs:  model — the model to drop; None uses OLLAMA_MODEL.
+    Returns: None. Errors are swallowed: freeing memory is a courtesy to whatever
+             runs next, never a reason to fail a run that already succeeded.
+    Notes:   keep_alive=0 with no messages is Ollama's unload request — it answers
+             done_reason="unload". Worth doing because a resident model holds its
+             weights in VRAM *and* a host-RAM prompt cache, and embed.py pulls
+             torch into that same host RAM straight after a check run.
+    Used by: run(), once the last model call has returned.
+    """
+    req = urllib.request.Request(
+        f"{OLLAMA_URL}/api/chat",
+        data=json.dumps({"model": model or OLLAMA_MODEL, "keep_alive": 0}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=30).close()
+    except OSError:                       # ollama already gone, or never reachable
+        pass
 
 
 def extract(description, model=None, url=""):
@@ -826,6 +849,9 @@ def run(ids=None, model=None, workers=None, progress=True, mode="full"):
                 else:
                     dead += 1
                     tqdm.write(f"  - dead: {r['url']}")
+
+    if mode != "alive":                   # an alive-only run never loaded the model
+        unload(model)
 
     print(f"{live} still open, {dead} dead (hidden from the tab).")
     return live, dead
