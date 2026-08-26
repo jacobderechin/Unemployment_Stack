@@ -26,6 +26,7 @@ import re
 import sqlite3
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -330,6 +331,42 @@ def upsert_match(conn, job, salary=""):
             "found_at": date.today().isoformat(),
         },
     )
+
+
+def add_match(conn, url, title, company, location=None):
+    """Manually log one posting by url, unless that url is already logged.
+
+    Inputs:  conn — an open research.db connection.
+             url — the posting url; must be http(s).
+             title, company — required. Parsed off the page by enrich.posting_meta and
+             confirmed by the user, since a bare url carries neither.
+             location — optional; blank/None is stored as NULL, same as a feed row with
+             no location.
+    Returns: (id, created). created is False when the url was already present, and
+             then the existing row is left untouched — a manual add never overwrites
+             what a scan or enrich.py already filled in.
+    Raises:  ValueError on a blank field or a non-http(s) url. The scheme check
+             mirrors enrich.fetch's allowlist: enrich.py opens this url later, and a
+             file:// slipping in would be read off disk.
+
+    The row goes in bare, exactly like a scan insert — salary/skills/description/years
+    stay NULL for enrich.py, reached through the tab's Check button like any other row.
+    Used by: POST /api/research/add.
+    """
+    url = (url or "").strip()
+    title = (title or "").strip()
+    company = (company or "").strip()
+    if not (url and title and company):
+        raise ValueError("url, title and company are all required")
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError("url must start with http:// or https://")
+    row = conn.execute("SELECT id FROM market_matches WHERE url = ?", (url,)).fetchone()
+    if row:
+        return row["id"], False
+    upsert_match(conn, {"url": url, "title": title, "company": company,
+                        "location": location, "skill_level": None})
+    conn.commit()
+    return conn.execute("SELECT id FROM market_matches WHERE url = ?", (url,)).fetchone()["id"], True
 
 
 def list_matches(conn, profile=None):

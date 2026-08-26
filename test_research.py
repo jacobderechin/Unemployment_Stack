@@ -106,6 +106,49 @@ def test_list_matches_shows_all_when_profile_has_no_titles():
     assert len(research.list_matches(conn, prof())) == 2
 
 
+def empty_db():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    research.init_db(conn)
+    return conn
+
+
+def test_add_match_inserts_a_bare_row():
+    conn = empty_db()
+    mid, created = research.add_match(conn, "https://x/1", "Staff Engineer", "Acme")
+    assert created
+    row = conn.execute("SELECT * FROM market_matches WHERE id = ?", (mid,)).fetchone()
+    assert (row["title"], row["company"], row["alive"]) == ("Staff Engineer", "Acme", 1)
+    assert row["years_experience"] is None            # left NULL for enrich.py
+
+
+def test_add_match_stores_the_parsed_location():
+    conn = empty_db()
+    mid, _ = research.add_match(conn, "https://x/1", "Staff Engineer", "Acme", "San Francisco")
+    row = conn.execute("SELECT location FROM market_matches WHERE id = ?", (mid,)).fetchone()
+    assert row["location"] == "San Francisco"
+    # blank location is stored as NULL, same as a feed row that carries none
+    mid2, _ = research.add_match(conn, "https://x/2", "Staff Engineer", "Acme", "")
+    assert conn.execute("SELECT location FROM market_matches WHERE id = ?", (mid2,)).fetchone()[0] is None
+
+
+def test_add_match_is_idempotent_and_never_overwrites():
+    conn = empty_db()
+    first, _ = research.add_match(conn, "https://x/1", "Staff Engineer", "Acme")
+    same, created = research.add_match(conn, "https://x/1", "Different Title", "Other")
+    assert not created and same == first
+    assert conn.execute("SELECT title FROM market_matches WHERE id = ?",
+                        (first,)).fetchone()[0] == "Staff Engineer"
+
+
+def test_add_match_rejects_blank_fields_and_non_http_urls():
+    conn = empty_db()
+    for bad in [("", "T", "C"), ("https://x", "", "C"), ("https://x", "T", ""),
+                ("file:///etc/passwd", "T", "C"), ("javascript:alert(1)", "T", "C")]:
+        with pytest.raises(ValueError):
+            research.add_match(conn, *bad)
+
+
 import gzip
 import json
 import urllib.error

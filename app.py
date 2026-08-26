@@ -19,6 +19,7 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import enrich   # posting_meta reads title/company/location off a pasted url (one Ollama call)
 import research  # market-research feed scan + research.db helpers (self-contained)
 import resume    # resume text extraction + the posting scorer (no torch: embed.py is a subprocess)
 from enrich import MODES  # enrich still runs as a subprocess; this is just the mode names
@@ -614,6 +615,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             except Exception as e:            # noqa: BLE001 - surface to the UI
                 return self._send(500, {"error": str(e)})
+        if self.path == "/api/research/parse":
+            # The Add-by-URL "Fetch" button: one Ollama call to read title/company/location
+            # off the pasted page (~seconds), so it stays synchronous like /api/auth rather
+            # than joining the scan/check job queue. A fetch or model failure is a 502.
+            try:
+                url = (self._body().get("url") or "").strip()
+            except json.JSONDecodeError as e:
+                return self._send(400, {"error": str(e)})
+            if not url:
+                return self._send(400, {"error": "url is required"})
+            try:
+                return self._send(200, enrich.posting_meta(url))
+            except Exception as e:            # noqa: BLE001 - fetch/model failure, surface to the UI
+                return self._send(502, {"error": str(e)})
+        if self.path == "/api/research/add":
+            # Manually log one posting by url. Synchronous (a single INSERT, no model
+            # call), unlike scan/check.
+            try:
+                d = self._body()
+                with closing(research.connect()) as conn:
+                    mid, created = research.add_match(
+                        conn, d.get("url"), d.get("title"), d.get("company"), d.get("location"))
+                return self._send(201 if created else 200,
+                                  {"id": mid, "created": created})
+            except (ValueError, json.JSONDecodeError) as e:
+                return self._send(400, {"error": str(e)})
         if self.path != "/api/jobs":
             return self._send(404, {"error": "not found"})
         try:
