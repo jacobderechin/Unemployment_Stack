@@ -164,6 +164,17 @@
     display: block; flex: 1; min-height: 0; overflow: auto; padding: 24px 20px;
   }
 
+  /* --- board filter row --- */
+  /* Shown only on the Board tab. It can't ride .view/.view.active like the tab bodies
+     do: it lives outside #board (render() wipes that element's innerHTML), so the
+     :has() on the Board *button* is what scopes it. */
+  #boardFilter { display: none; align-items: center; gap: 12px; padding: 10px 20px;
+                 background: var(--surface); border-bottom: 1px solid var(--rule); }
+  body:has(#tabBoard.active) #boardFilter { display: flex; }
+  #boardFilter label { font-size: var(--t-sm); color: var(--ink-2); }
+  #boardSearch { flex: 1; max-width: 360px; }
+  #boardCount { font-family: var(--font-display); font-size: var(--t-sm); color: var(--ink-3); }
+
   /* --- board --- */
   /* No `display` here on purpose: .board and .view have equal specificity, so a
      display:grid on this rule would out-order .view{display:none} and the board would
@@ -473,6 +484,12 @@
   <button id="tabResume">Resume analysis</button>
 </nav>
 
+<div id="boardFilter">
+  <label for="boardSearch">Filter</label>
+  <input id="boardSearch" type="search" placeholder="company or title, -exclude" autocomplete="off">
+  <span id="boardCount"></span>
+</div>
+
 <main class="board view active" id="board"></main>
 <section class="view" id="timing"></section>
 <section class="view" id="heatmap"></section>
@@ -719,12 +736,18 @@ function cardEl(job) {
 function render(jobs) {
   const board = document.getElementById("board");
   board.innerHTML = "";
+  // Filtering here rather than at the call sites means the filter survives every
+  // redraw: load(), the drag-drop refresh and a milestone edit all come back through
+  // render() and re-read the box.
+  const shown = jobs.filter(boardFilter(document.getElementById("boardSearch").value));
+  const count = document.getElementById("boardCount");
+  count.textContent = shown.length === jobs.length ? "" : `${shown.length} of ${jobs.length} shown`;
   for (const [status, label] of COLUMNS) {
     const col = document.createElement("section");
     col.className = "column";
     col.dataset.status = status;                  // picks the stage hue for the column rule
     col.innerHTML = `<h2><span class="col-name"></span><span class="col-n"></span></h2><div class="dropzone"></div>`;
-    const inColumn = jobs.filter(j => j.status === status);
+    const inColumn = shown.filter(j => j.status === status);
     col.querySelector(".col-name").textContent = label;
     col.querySelector(".col-n").textContent = inColumn.length;
     const zone = col.querySelector(".dropzone");
@@ -764,6 +787,10 @@ async function load() {
   for (const v of Object.values(VIEWS))
     if (document.getElementById(v.el).classList.contains("active")) v.render();
 }
+
+// ponytail: no debounce — filtering a few hundred cards in memory is well under a
+// frame, and a debounce would only add lag you can feel while typing.
+document.getElementById("boardSearch").addEventListener("input", () => render(allJobs));
 
 // --- activity heatmap (GitHub-style, last ~53 weeks, computed client-side) ---
 const HM_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -1403,6 +1430,22 @@ function titleFilter(query) {
 }
 
 /**
+ * Build a card-matching predicate from the board's filter box.
+ *
+ * Company and title are matched as one string, so "acme engineer" narrows across both
+ * fields at once and you never have to think about which field a term belongs to. Same
+ * AND-narrow / `-term`-excludes rule as the Job search box, because it is the same
+ * function underneath.
+ *
+ * @param {string} query - e.g. "acme senior" or "-recruiter".
+ * @returns {(job: object) => boolean} true to keep the card. An empty query keeps everything.
+ */
+const boardFilter = query => {
+  const pass = titleFilter(query);
+  return job => pass(`${job.company} ${job.title}`);
+};
+
+/**
  * Build a location-matching predicate from a filter-box query.
  *
  * Locations are not titles: the placeholder promises "remote, san francisco", so
@@ -1497,6 +1540,21 @@ function levelFilterSelfTest() {
   eq(keep(LEVELS, null),                true,  "all four checked is no restriction, so blanks show too");
   eq(keep(["mid", "senior"], null),     false, "narrowing to some levels still drops blanks");
   console.log("level filter self-test done");
+}
+
+/**
+ * Self-test: the board box matches across company and title, and excludes.
+ * @returns {void} console assertions.
+ */
+function boardFilterSelfTest() {
+  const job = { company: "Acme Corp", title: "Senior Engineer" };
+  eq(boardFilter("")(job),            true,  "an empty box keeps every card");
+  eq(boardFilter("acme")(job),        true,  "company matches, case-insensitively");
+  eq(boardFilter("engineer")(job),    true,  "title matches");
+  eq(boardFilter("acme senior")(job), true,  "terms spanning both fields still AND-narrow");
+  eq(boardFilter("acme staff")(job),  false, "a term matching neither field drops the card");
+  eq(boardFilter("-acme")(job),       false, "-term excludes");
+  console.log("boardFilter self-test done");
 }
 
 /**
@@ -2966,7 +3024,7 @@ function salaryRangeSVGSelfTest() {
   console.log("salaryRangeSVG self-test done");
 }
 
-if (location.hash === "#selftest") { timingSelfTest(); titleFilterSelfTest(); locationFilterSelfTest(); levelFilterSelfTest(); mktSortSelfTest(); safeHrefSelfTest(); parseSalarySelfTest(); titleBucketSelfTest(); locationBucketSelfTest(); salaryGroupsSelfTest(); salaryRangeSVGSelfTest(); resumeSelfTest(); busySelfTest(); }
+if (location.hash === "#selftest") { timingSelfTest(); titleFilterSelfTest(); boardFilterSelfTest(); locationFilterSelfTest(); levelFilterSelfTest(); mktSortSelfTest(); safeHrefSelfTest(); parseSalarySelfTest(); titleBucketSelfTest(); locationBucketSelfTest(); salaryGroupsSelfTest(); salaryRangeSVGSelfTest(); resumeSelfTest(); busySelfTest(); }
 
 /**
  * Draw the Job search tab: the search profile, and the table of logged matches.
